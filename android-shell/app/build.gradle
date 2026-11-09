@@ -43,8 +43,9 @@ android {
         // 1.0.29：AndroidShell / PhoneWidget 使用顶层 nonce 桥，第三方 iframe 无法调用原生能力。
         // 1.0.30: scoped SAF text directories, user picker, create-only writes.
         // 1.0.31: task-scoped UI tools and independently optional heart wake.
-        versionCode 30
-        versionName "1.0.31"
+        // 1.0.32: compose explicitly granted UI tools in the workbench task.
+        versionCode 31
+        versionName "1.0.32"
         buildConfigField "String", "SITE_URL", "\"${siteUrl}\""
     }
 

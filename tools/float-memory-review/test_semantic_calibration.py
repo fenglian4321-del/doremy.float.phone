@@ -67,12 +67,13 @@ class CalibrationTests(unittest.TestCase):
         self.assertIsNone(result["recommendedFloor"])
         self.assertEqual(result["status"], "needs_review")
 
-    def test_lexical_false_positive_is_not_hidden_by_high_vector_floor(self):
+    def test_lexical_false_positive_must_pass_the_runtime_semantic_gate(self):
         value = dataset()
         value["queries"][2]["text"] = "aaaaaa search"
         result = calibration.calibrate(value, configuration(), transport)
-        self.assertGreater(result["calibration"]["falsePositive"], 0)
-        self.assertIsNone(result["recommendedFloor"])
+        self.assertEqual(result["calibration"]["falsePositive"], 0)
+        self.assertEqual(result["recommendedFloor"], 0.99)
+        self.assertEqual(result["relevancePolicy"], "all-candidates-cosine-v1")
 
     def test_explicit_query_prefix_used_once_per_query(self):
         seen = []

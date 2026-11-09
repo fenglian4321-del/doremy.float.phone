@@ -147,6 +147,38 @@ class ConfiguredEmbeddingProvider(EmbeddingProvider):
         return vectors
 
 
+SEMANTIC_RELEVANCE_POLICY = "all-candidates-cosine-v1"
+
+
+class SemanticCandidateIndex(MemoryIndex):
+    """Keep upstream hybrid ranking; require semantic evidence on every result.
+
+    Upstream exposes the already-computed cosine with with_relevance=True.
+    Filtering its ranked candidates adds no embedding request and also covers
+    candidates admitted solely by BM25 or expanded through graph neighbors.
+    """
+    def retrieve_candidates(self, query, topN=5, reranker=None, coarse_topM=20,
+                            routes=None, with_relevance=False):
+        if (not self.embed or self.vec_floor is None
+                or not math.isfinite(self.vec_floor) or not 0 <= self.vec_floor <= 1):
+            raise SemanticError("embedding_unavailable", "语义候选缺少已标定门槛，未回退词面结果。")
+        hits = super().retrieve_candidates(query, topN=topN, reranker=reranker,
+                                          coarse_topM=coarse_topM, routes=routes,
+                                          with_relevance=True)
+        selected = []
+        for hit in hits:
+            score = hit.get("_vector_score")
+            if type(score) not in (int, float) or not math.isfinite(score):
+                raise SemanticError("embedding_unavailable", "语义候选缺少有效相关度，未返回未核对结果。")
+            # Normalized vectors can exceed 1 by floating-point roundoff.
+            if min(1.0, max(-1.0, score)) <= self.vec_floor:
+                continue
+            if not with_relevance:
+                hit = {key: value for key, value in hit.items() if key != "_vector_score"}
+            selected.append(hit)
+        return selected
+
+
 class SemanticRecall:
     """One bounded background build; final selection always rereads canonical IDs."""
     def __init__(self, provider):
@@ -176,7 +208,7 @@ class SemanticRecall:
         self.state = "building" if self.job and not self.job.done() else "outdated"
 
     def identity(self, values):
-        value = [self.provider.id, sorted((row["id"], row["revision"]) for row in values)]
+        value = [SEMANTIC_RELEVANCE_POLICY, self.provider.id, sorted((row["id"], row["revision"]) for row in values)]
         return hashlib.sha256(json.dumps(value, ensure_ascii=False).encode()).hexdigest()
 
     @staticmethod
@@ -186,7 +218,7 @@ class SemanticRecall:
 
     def _build(self, values):
         with self.provider.budget(120):
-            index = MemoryIndex(embed=True, provider=self.provider)
+            index = SemanticCandidateIndex(embed=True, provider=self.provider)
             for row in values:
                 index.add(row["content"], {"canonical_id": row["id"], "canonical_revision": row["revision"]})
             if len(index.chunks) > 4000 or len(index.chunks) * self.provider.dimension > 2_000_000:

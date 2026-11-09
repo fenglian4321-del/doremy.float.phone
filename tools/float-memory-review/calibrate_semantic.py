@@ -10,15 +10,14 @@ import re
 import sys
 import time
 
-from float_latent_semantic import ConfiguredEmbeddingProvider, SemanticError
-from float_latent_vendor import MemoryIndex
+from float_latent_semantic import ConfiguredEmbeddingProvider, SemanticError, SemanticCandidateIndex, SEMANTIC_RELEVANCE_POLICY
 
 
 class CalibrationError(Exception):
     pass
 
 
-class EvaluationIndex(MemoryIndex):
+class EvaluationIndex(SemanticCandidateIndex):
     """Reuse raw scores too; keep the upstream hybrid ranking unchanged."""
     def _vector_scores(self, query):
         if query not in self.evaluation_scores:
@@ -152,7 +151,7 @@ def calibrate(value, env=None, transport=None):
             raise CalibrationError("校准超过总预算，未给出门槛。")
         supported = 0 < selected["floor"] < 1 and all(metrics["falsePositive"] == 0 and metrics["recall"] >= 0.8 for metrics in [selected, held_out])
         return {"version": 1, "mode": "explicit-sample-evaluation", "activated": False,
-                "configurationFingerprint": provider.id, "counts": counts,
+                "configurationFingerprint": provider.id, "relevancePolicy": SEMANTIC_RELEVANCE_POLICY, "counts": counts,
                 "memories": len(value["memories"]), "chunks": len(index.chunks),
                 "embeddingRequests": provider.calls, "embeddedTexts": provider.texts_embedded,
                 "gridStep": 0.01, "candidateFloor": selected["floor"],
@@ -160,7 +159,7 @@ def calibrate(value, env=None, transport=None):
                 "calibration": selected, "validation": held_out,
                 "status": "sample_supported" if supported else "needs_review",
                 "limits": ["Small supplied sample; not a production quality guarantee.",
-                           "BM25/graph can admit results regardless of vector floor.",
+                           "All hybrid candidates must pass the same cosine gate as runtime.",
                            "No runtime config, canonical memory or engine choice changed."]}
     finally:
         index.clear_primed_query_vectors()

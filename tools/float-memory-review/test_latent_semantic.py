@@ -5,7 +5,7 @@ import tempfile
 import threading
 import unittest
 
-from float_latent_semantic import ConfiguredEmbeddingProvider, SemanticError, SemanticRecall
+from float_latent_semantic import ConfiguredEmbeddingProvider, SemanticError, SemanticRecall, SemanticCandidateIndex
 from float_latent_vendor import MemoryIndex
 from review_service import ReviewError, ReviewService
 from test_review_service import Manager
@@ -87,6 +87,39 @@ class ProviderTests(unittest.TestCase):
             thread.join()
 
 
+class SemanticCandidateGateTests(unittest.TestCase):
+    def test_bm25_and_graph_candidates_are_filtered_without_changing_hybrid_order(self):
+        documents = ["shared subject alpha", "shared subject beta", "gamma extra"]
+        query = "shared subject inquiry"
+        vectors = {documents[0]: [0.8, 0.6, 0], documents[1]: [0.1, 0.99, 0],
+                   documents[2]: [0.9, 0.435, 0], query: [1, 0, 0]}
+        requests = []
+        def post(payload):
+            requests.append(payload["input"])
+            return {"data": [{"index": i, "embedding": vectors[text]}
+                             for i, text in enumerate(payload["input"])]}
+        indexes = []
+        for cls in (MemoryIndex, SemanticCandidateIndex):
+            index = cls(embed=True, provider=ConfiguredEmbeddingProvider(configuration(), post))
+            for i, text in enumerate(documents):
+                index.add(text, {"canonical_id": str(i)})
+            index.build()
+            index.graph_seeds = 1
+            index._neighbors = {0: [1], 1: [2], 2: [1]}
+            indexes.append(index)
+        raw = indexes[0].retrieve_candidates(query, topN=20, with_relevance=True)
+        self.assertIn("1", [hit["meta"]["canonical_id"] for hit in raw])
+        before = len(requests)
+        gated = indexes[1].retrieve_candidates(query, topN=20)
+        self.assertEqual(len(requests) - before, 1, "No extra embedding request")
+        self.assertEqual([hit["id"] for hit in gated],
+                         [hit["id"] for hit in raw if hit["_vector_score"] > 0.7])
+        self.assertEqual({hit["meta"]["canonical_id"] for hit in gated}, {"0", "2"})
+        self.assertTrue(all("_vector_score" not in hit for hit in gated))
+        indexes[1].vec_floor = 1
+        self.assertEqual(indexes[1].retrieve_candidates(query, topN=20), [])
+
+
 class SemanticRecallTests(unittest.IsolatedAsyncioTestCase):
     query = "吃东西有什么忌口"
     def setUp(self):
@@ -146,6 +179,33 @@ class SemanticRecallTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await self.ready("火星天气如何"))["entries"], [])
         self.assertIn(self.query, self.inputs)
         self.assertFalse(any(path.suffix in (".json", ".vec") for path in __import__("pathlib").Path(self.temp.name).rglob("*")))
+
+    async def test_same_name_unknown_question_cannot_bypass_semantic_gate(self):
+        await self.add("青禾喜欢雨天独自听钢琴曲。", "music")
+        await self.add("明澈养的橘猫叫团子。", "cat")
+        self.query = "青禾的护照有效期是哪天？"
+        def post(payload):
+            self.inputs.extend(payload["input"])
+            return {"data": [{"index": i, "embedding": [0, 0, 1] if text == self.query else [1, 0, 0]}
+                             for i, text in enumerate(payload["input"])]}
+        self.provider._transport = post
+        self.assertEqual((await self.ready())["entries"], [])
+        raw = MemoryIndex.retrieve_candidates(self.service.latent_semantic.index, self.query, topN=20)
+        self.assertTrue(raw, "Unknown fact would otherwise pass same-name BM25")
+
+    async def test_stop_during_embedding_never_returns_late_candidate(self):
+        await self.add("她对花生严重过敏。", "allergy")
+        await self.ready()
+        self.block_queries = True
+        pending = asyncio.create_task(self.service.memories(self.query, "latent"))
+        self.assertTrue(await asyncio.to_thread(self.entered.wait, 1))
+        self.service.latent_semantic.stop()
+        self.release.set()
+        with self.assertRaises(ReviewError):
+            await pending
+        self.assertIsNone(self.service.latent_semantic.index)
+        with self.assertRaises(ReviewError):
+            await self.service.memories(self.query, "latent")
 
     async def test_correction_archive_delete_and_external_edit_invalidate_vectors(self):
         target = await self.add("她对花生严重过敏。", "allergy")
