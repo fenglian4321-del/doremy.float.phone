@@ -104,6 +104,8 @@ import { makeTimedWakeId, saveTimedWakeSchedule } from "./timed-wake-storage";
 import { resolveUserIdentity } from "./settings-storage";
 import { attachAbortSignal, isAbortError, throwIfAborted } from "./abort-utils";
 import { executeCodexGatewayTool, isCodexGatewayTool } from "./codex-gateway-client";
+import { executeManagedMcpTool } from './managed-mcp-client';
+import type { ManagedMcpScope, ManagedMcpRunRef } from './managed-mcp-policy';
 import {
     deleteShortcutCommandMediaUrl,
     registerShortcutCommandMediaCleanup,
@@ -121,10 +123,14 @@ export type MemoryWriteRequest = {
 };
 
 export type ToolExecutionContext = {
+    managedMcpScope?: ManagedMcpScope;
+    managedMcpRequestId?: string;
+    managedMcpRun?: ManagedMcpRunRef;
     appId?: string;
     sessionId?: string;
     characterId?: string;
-    sourceEngine?: "chat" | "group_chat" | "custom_app";
+    sourceEngine?: "chat" | "group_chat" | "custom_app" | "workspace";
+    workspace?: { mode: "work" | "private"; workspaceId: string; approved: true };
     signal?: AbortSignal;
     onShortcutCommandCreated?: (command: {
         id: string;
@@ -142,6 +148,7 @@ function isSupportedChatToolContext(
         && (
             (context.appId === "chat" && context.sourceEngine === "chat")
             || (context.appId === "group_chat" && context.sourceEngine === "group_chat")
+            || (context.appId === "workspace" && context.sourceEngine === "workspace" && context.workspace?.approved === true && /^(work|private)$/.test(context.workspace.mode) && /^[A-Za-z0-9_-]{1,100}$/.test(context.workspace.workspaceId))
         ),
     );
 }
@@ -581,7 +588,7 @@ async function executeSingleToolCall(
             if (!server.enabled || !server.discoveredTools) continue;
             if (hint.serverId && server.id !== hint.serverId) continue;
             if (server.discoveredTools.find(t => t.name === call.name)) {
-                return executeMcpTool(server, call.name, call.args, context?.signal);
+                return executeMcpTool(server, call.name, call.args, context?.signal, context);
             }
         }
         return null;
@@ -2493,7 +2500,7 @@ async function executeMusicControlTool(call: ToolCall, context?: ToolExecutionCo
         };
     }
 
-    if (context?.appId !== "chat" && context?.appId !== "group_chat") {
+    if (context?.appId !== "chat" && context?.appId !== "group_chat" && !(context?.appId === "workspace" && context.sourceEngine === "workspace" && context.workspace?.approved)) {
         return {
             name: call.name,
             success: false,
@@ -3633,7 +3640,7 @@ async function executeTimedWakeTool(call: ToolCall, context?: ToolExecutionConte
         };
     }
 
-    if (!context?.sessionId || !context.characterId || context.appId !== "chat" || context.sourceEngine !== "chat") {
+    if (!context?.sessionId || !context.characterId || !((context.appId === "chat" && context.sourceEngine === "chat") || (context.appId === "workspace" && context.sourceEngine === "workspace" && context.workspace?.approved))) {
         return {
             name: "稍后主动联系",
             success: false,
@@ -4807,7 +4814,8 @@ export async function completePendingMcpOAuthCallback(): Promise<{ completed: bo
 
 // ── MCP Tool Execution (with handshake) ───────
 
-async function executeMcpTool(server: McpServerConfig, toolName: string, args: Record<string, unknown>, signal?: AbortSignal): Promise<ToolResult> {
+export async function executeMcpTool(server: McpServerConfig, toolName: string, args: Record<string, unknown>, signal?: AbortSignal, context?: Pick<ToolExecutionContext, 'managedMcpScope' | 'managedMcpRequestId' | 'managedMcpRun'>): Promise<ToolResult> {
+    if (server.managedServiceId) return executeManagedMcpTool(server.managedServiceId, toolName, args, context?.managedMcpScope, context?.managedMcpRequestId, signal, context?.managedMcpRun);
     try {
         throwIfAborted(signal);
         // Ensure initialized
@@ -4894,6 +4902,7 @@ async function extractMcpToolResult(toolName: string, result: unknown, signal?: 
 // ── MCP Tool Discovery (with handshake) ───────
 
 export async function discoverMcpTools(serverUrl: string, server?: McpServerConfig): Promise<{ name: string; description: string; inputSchema: object }[]> {
+    if (server?.managedServiceId) throw new Error('受控MCP目录请在当前工作/私人空间核对；不会回退浏览器直连或旧代理。');
     // Initialize if server object provided
     if (server) {
         const init = await mcpInitialize(server);
@@ -5019,6 +5028,7 @@ function renderMcpOAuthPopupLoading(popup: Window, server: McpServerConfig): voi
 }
 
 export async function startMcpOAuth(server: McpServerConfig): Promise<{ success: boolean; error?: string }> {
+    if (server.managedServiceId) return { success: false, error: '此服务凭据由管理员保存在服务端，未启动浏览器OAuth。' };
     // Open popup IMMEDIATELY (synchronous, from user click context) to avoid browser blocking
     const popup = window.open("about:blank", "mcp_oauth", "width=600,height=700,left=200,top=100");
     if (!popup) {

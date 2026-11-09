@@ -1509,7 +1509,7 @@ export function getInternalCapability(id: string): InternalCapabilityConfig | nu
 }
 
 export function getEnabledInternalCapabilities(appId?: string): InternalCapabilityConfig[] {
-    if (appId !== "chat" && appId !== "group_chat") return [];
+    if (appId !== "chat" && appId !== "group_chat" && appId !== "workspace") return [];
     return loadInternalCapabilities().filter(item => {
         if (!item.enabled || item.mode === "off") return false;
         // 角色电脑是可插拔模块：没连接就不注入，模型完全看不见

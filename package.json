@@ -11,10 +11,11 @@
     "test:character-id": "node scripts/test-character-id-integration.mjs",
     "test:codex-gateway": "node scripts/test-codex-gateway.mjs",
     "test:consolidation": "node scripts/test-consolidation.mjs",
-    "test:xinchao": "node scripts/test-xinchao.mjs && node scripts/test-xinchao-chat.mjs",
+    "test:xinchao": "node scripts/test-xinchao.mjs && node scripts/test-xinchao-chat.mjs && node scripts/test-xinchao-feedback.mjs",
     "test:workspaces": "node scripts/test-workspaces.mjs",
     "test:phone-files": "node scripts/check-android-permissions.mjs && node scripts/check-scoped-files.mjs --compile-policy && node scripts/test-scoped-phone-files.mjs",
     "test:phone-tools": "node scripts/test-phone-file-tools.mjs",
+    "test:managed-mcp": "node scripts/test-managed-mcp.mjs && node scripts/test-managed-mcp-model.mjs",
     "test:usage-reasons": "node scripts/test-usage-reasons.mjs",
     "test:private-memory": "node --experimental-vm-modules scripts/test-memory-controls.mjs && node --experimental-vm-modules --experimental-strip-types scripts/test-token-usage.mjs && node scripts/test-usage-ledger.mjs && node --experimental-strip-types scripts/test-orbis-memory-import.mjs && node scripts/test-shared-memory.mjs && node scripts/test-shared-memory-review.mjs && node scripts/test-shared-memory-origin.mjs",
     "test:widget-output": "node scripts/test-phone-widget-output.mjs",
@@ -27,7 +28,10 @@
     "weixin:assistant:once": "node tools/weixin-local-assistant/assistant.mjs --once",
     "weixin:build-dist": "node scripts/build-weixin-assistant-dist.mjs",
     "push:build-dist": "node scripts/build-personal-push-dist.mjs",
-    "build:glass-icons": "node scripts/build-glass-icons.mjs"
+    "build:glass-icons": "node scripts/build-glass-icons.mjs",
+    "test:phone-device": "node scripts/check-device-ui.mjs --compile-policy && node scripts/test-phone-device-tools.mjs",
+    "test:private-runtime-safety": "node scripts/test-device-local-backup.mjs && node scripts/test-diary-timer-control.mjs",
+    "test:usage-cost": "node scripts/test-usage-cost.mjs"
   },
   "dependencies": {
     "@gltf-transform/functions": "^4.4.1",

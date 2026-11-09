@@ -418,6 +418,8 @@ export type McpDiscoveredTool = {
 
 export type McpServerConfig = {
     id: string;
+    /** Server-managed service reference: no browser URL/credentials. */
+    managedServiceId?: string;
     name: string;
     description?: string;
     url: string;

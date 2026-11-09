@@ -963,7 +963,7 @@ function DiaryEntryTimerSettingsPanel({ characters, settings, generatingCharacte
         <header>
           <div>
             <h2>定时写日记</h2>
-            <p>默认一天一次；未选择角色时，会按全部角色处理。</p>
+            <p>默认关闭，间隔默认一天；未选择角色时，会按全部角色处理。每个到期角色会请求一次其日记API，用量中标为「定时写日记」。关闭会停止后续生成，已发出的请求可能仍产生费用。</p>
           </div>
           <button type="button" className="diary-icon-btn" onClick={onClose} aria-label="关闭">
             <X size={18} />

@@ -177,6 +177,14 @@ class MainActivity : AppCompatActivity() {
     private val deviceAction by lazy { DeviceActionBridge(this) }
     private val scopedFilesDelegate = lazy { ScopedFilesBridge(this, shellOriginRule().orEmpty()) { isTrustedShellPage() } }
     private val scopedFiles by scopedFilesDelegate
+    private val deviceUiDelegate = lazy { DeviceUiBridge(this, shellOriginRule().orEmpty()) { isTrustedShellPage() } }
+    private val deviceUi by deviceUiDelegate
+    private val pendingDeviceUiPicker = java.util.concurrent.atomic.AtomicReference<String?>(null)
+    private val deviceUiLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+        val id = pendingDeviceUiPicker.getAndSet(null) ?: return@registerForActivityResult
+        val component = if (result.resultCode == android.app.Activity.RESULT_OK && isTrustedShellPage()) result.data?.component else null
+        deviceUi.finishGrant(id, component)
+    }
     private val pendingScopedPicker = java.util.concurrent.atomic.AtomicReference<String?>(null)
     private val scopedDirectoryLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
         val id = pendingScopedPicker.getAndSet(null) ?: return@registerForActivityResult
@@ -1145,6 +1153,7 @@ private fun deleteCachedSharedVideoInternal(cacheId: String): Boolean {
 
         webView.webViewClient = object : WebViewClient() {
             override fun onPageStarted(view: WebView, url: String?, favicon: Bitmap?) {
+                if (deviceUiDelegate.isInitialized()) deviceUi.invalidateDocument()
                 trustedShellUrl = url ?: trustedShellUrl
                 if (!secureBridgeDocumentStartInstalled && isTrustedShellPage()) {
                     view.evaluateJavascript(secureBridgeBootstrapScript(), null)
@@ -1513,6 +1522,7 @@ private fun deleteCachedSharedVideoInternal(cacheId: String): Boolean {
         }
         runCatching { sharedVideoExecutor.shutdownNow() }
         if (scopedFilesDelegate.isInitialized()) runCatching { scopedFiles.close() }
+        if (deviceUiDelegate.isInitialized()) runCatching { deviceUi.close() }
         super.onDestroy()
     }
 
@@ -1734,6 +1744,46 @@ private fun deleteCachedSharedVideoInternal(cacheId: String): Boolean {
 
         @JavascriptInterface
         fun getScopedFilesCapabilities(): String = scopedFiles.capabilities()
+
+        @JavascriptInterface
+        fun getDeviceUiCapabilities(): String = deviceUi.capabilities()
+
+        @JavascriptInterface
+        fun requestDeviceUiGrant(scope: String, requestId: String, allowActions: Boolean, task: String): String = deviceUi.beginGrant(scope, requestId, allowActions, task) {
+            if (!pendingDeviceUiPicker.compareAndSet(null, requestId)) throw IllegalArgumentException("picker_busy")
+            try { deviceUiLauncher.launch(Intent(Intent.ACTION_PICK_ACTIVITY).putExtra(Intent.EXTRA_INTENT, Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER))) }
+            catch (error: Throwable) { pendingDeviceUiPicker.compareAndSet(requestId, null); deviceUi.finishGrant(requestId, null); throw error }
+        }
+
+        @JavascriptInterface
+        fun getDeviceUiGrant(scope: String, grantId: String): String = deviceUi.grantStatus(scope, grantId)
+
+        @JavascriptInterface
+        fun activateDeviceUiGrant(scope: String, grantId: String, runId: String, claim: String, taskDigest: String): String = deviceUi.activate(scope, grantId, runId, claim, taskDigest)
+
+        @JavascriptInterface
+        fun submitDeviceUi(json: String): String = deviceUi.submit(json)
+
+        @JavascriptInterface
+        fun getDeviceUiResult(scope: String, requestId: String): String = deviceUi.result(scope, requestId)
+
+        @JavascriptInterface
+        fun getDeviceUiReceipt(scope: String, requestId: String): String = deviceUi.receipt(scope, requestId)
+
+        @JavascriptInterface
+        fun cancelDeviceUi(scope: String, requestId: String): String = deviceUi.cancel(scope, requestId)
+
+        @JavascriptInterface
+        fun revokeDeviceUiGrant(scope: String, grantId: String): String = deviceUi.revoke(scope, grantId)
+
+        @JavascriptInterface
+        fun getXinchaoOfflineWakeStatus(): String = XinchaoOfflineWake.status(this@MainActivity)
+
+        @JavascriptInterface
+        fun setXinchaoOfflineWakeEnabled(enabled: Boolean): String {
+            if (!isTrustedShellPage() || !SITE_URL.startsWith("https://")) return "{\"ok\":false,\"code\":\"trusted_https_required\"}"
+            return XinchaoOfflineWake.configure(this@MainActivity, enabled)
+        }
 
         @JavascriptInterface
         fun requestScopedDirectory(scope: String, requestId: String): String = scopedFiles.beginPicker(scope, requestId) {

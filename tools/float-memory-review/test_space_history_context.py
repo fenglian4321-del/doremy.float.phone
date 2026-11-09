@@ -21,7 +21,7 @@ class HistoryContextTests(unittest.IsolatedAsyncioTestCase):
 
     async def call(self, op, kind="work", key="same", **fields):
         service = self.s.workspaces if kind == "work" else self.s.private_spaces
-        return await service.dispatch(dict(operation=op, **({} if op in ("create", "list") else dict(workspaceId=key)), **fields))
+        return await service.dispatch(dict(operation=op, _externalClient="v1", **({} if op in ("create", "list") else dict(workspaceId=key)), **fields))
 
     async def create(self, kind="work", key="same"):
         return await self.call("create", kind, key, title="合成空间", clientKey=key)

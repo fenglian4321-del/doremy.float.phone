@@ -62,6 +62,9 @@ async function verifyHealth(get: ReturnType<typeof createReader>) {
     const health = await get('/health');
     if (!object(health) || health.ok !== true || health.system !== 'xinchao-dynamic-mind' || health.version !== '4.3.0') return fail('xinchao_version', '当前心潮版本尚未适配；本入口仅支持已核对的4.3.0。');
 }
+export async function checkXinchaoHealth(config: Config, signal?: AbortSignal, fetcher: typeof fetch = fetch) {
+    await verifyHealth(createReader(config, signal, fetcher));
+}
 function projectNow(now: unknown): XinchaoSnapshot['now'] {
     if (!object(now) || typeof now.ok !== 'boolean' || typeof now.text !== 'string' || now.text.length > 16000
         || !revision(now.revision) || !at(now.generatedAt) || (now.ok && !now.text.trim())
@@ -72,6 +75,19 @@ export async function readXinchaoNow(config: Config, signal?: AbortSignal, fetch
     const get = createReader(config, signal, fetcher);
     await verifyHealth(get);
     return projectNow(await get('/v1/now'));
+}
+/** Content-free ordinary conversation; fixed companionship skips classifier models. */
+export async function recordXinchaoPresence(config: Config, eventId: string, sessionId: string, signal?: AbortSignal, fetcher: typeof fetch = fetch): Promise<{ revision: number; duplicate: boolean }> {
+    if (![eventId, sessionId].every(value => /^float:[a-f0-9]{64}$/.test(value))) return fail('xinchao_feedback_input', '反馈标识无效。', 400);
+    const requestSignal = AbortSignal.any([AbortSignal.timeout(2200), ...(signal ? [signal] : [])]);
+    await verifyHealth(createReader(config, requestSignal, fetcher));
+    requestSignal.throwIfAborted();
+    let response: Response;
+    try { response = await fetcher(config.baseUrl + '/v1/conversation-event', { method: 'POST', headers: { Authorization: `Bearer ${config.token}`, 'Content-Type': 'application/json', Accept: 'application/json' }, body: JSON.stringify({ eventId, sessionId, interactionType: 'companionship' }), cache: 'no-store', redirect: 'error', signal: requestSignal }); }
+    catch { return fail('xinchao_feedback_unconfirmed', '对话反馈未确认，未自动重试。'); }
+    const value = await readJson(response);
+    if (!object(value) || !revision(value.revision) || typeof value.duplicate !== 'boolean') return protocol();
+    return { revision: value.revision, duplicate: value.duplicate };
 }
 export async function readXinchaoSnapshot(config: Config, signal?: AbortSignal, fetcher: typeof fetch = fetch): Promise<XinchaoSnapshot> {
     const get = createReader(config, signal, fetcher);

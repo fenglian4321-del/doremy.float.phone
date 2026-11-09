@@ -45,6 +45,7 @@ const messages: Record<string, string> = {
     work_tool_forbidden: "独立工作区仅允许当前工作文件工具。",
     work_turn_limit: "请先恢复未完成动作；每个工作任务最多8轮工具调用。",
     work_finish: "仍有未完成动作、任务已停止或最终回复无效，工作进度保留。",
+    work_client_upgrade: "任务需要确认固定执行位置，请刷新配套客户端后核对；未回退或重放工具。",
     invalid_scope: "请选择具体对话与角色。",
     invalid_config: "整理设置或预算超出范围，请核对后重试。",
     version_conflict: "另一设备修改过整理设置，请刷新。",

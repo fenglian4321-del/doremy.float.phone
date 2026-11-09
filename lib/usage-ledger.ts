@@ -3,7 +3,8 @@ import type { TokenUsage } from "./token-usage";
 export const USAGE_REASON_LABELS = {
     chat: "普通回复 / 首轮决策", group_reply: "群聊回复 / 首轮决策", tool_continuation: "工具结果后的续写", resume: "用户恢复未完成任务",
     offline_reply: "线下模式回复（模型请求）", offline_summary_retry: "线下模式缺摘要后的补提",
-    manual_compression: "手动续聊压缩", manual_memory: "手动记忆整理", auxiliary: "辅助生成（具体功能未标注）",
+    manual_compression: "手动续聊压缩", manual_memory: "手动记忆整理", xinchao_proactive: "心潮主动消息（当前模型）", auxiliary: "辅助生成（具体功能未标注）",
+    diary_timer: "定时写日记", manual_diary: "手动生成日记",
     embedding: "向量请求", retry: "明确重试", tool_execution: "工具执行（非模型）", unknown: "未标注 / 历史记录",
 } as const;
 export type UsageReason = keyof typeof USAGE_REASON_LABELS;

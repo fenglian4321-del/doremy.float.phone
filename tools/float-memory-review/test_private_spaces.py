@@ -19,7 +19,7 @@ class PrivateSpaceTests(unittest.IsolatedAsyncioTestCase):
 
     async def call(self, operation, kind="private", key="same-id", **payload):
         service = self.s.private_spaces if kind == "private" else self.s.workspaces
-        return await service.dispatch(dict(operation=operation, **({} if operation in ("create", "list") else dict(workspaceId=key)), **payload))
+        return await service.dispatch(dict(operation=operation, _externalClient="v1", **({} if operation in ("create", "list") else dict(workspaceId=key)), **payload))
 
     async def create(self, kind="private"):
         return await self.call("create", kind=kind, title="私人日记" if kind == "private" else "工作项目", clientKey="same-id")

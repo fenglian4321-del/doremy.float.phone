@@ -1,5 +1,6 @@
 import type { UsageReason } from "./usage-ledger";
 import { allowedXinchaoLayers, noteXinchaoChatStatus, prepareXinchaoChatLayer } from "./xinchao-chat";
+import { prepareXinchaoFeedback } from "./xinchao-feedback";
 import { redactXinchaoLayers, withoutXinchaoLayers } from "./xinchao-ephemeral";
 import { beginConsolidation, projectConsolidation, notifyConsolidation, type ConsolidationProjection, type ConsolidationRun } from "./consolidation-client";
 import { createPrivateDecisionStreamFilter, extractPrivateDecision, insertConsolidationLayer } from "./consolidation-protocol";
@@ -417,6 +418,7 @@ export type DebugPromptRequestOptions = {
     appTags?: string[];
     debugSessionId?: string;
     usageReason?: UsageReason;
+    usageSource?: "chat" | "background" | "qa";
 };
 
 type ChatPromptBuildOptions = {
@@ -889,6 +891,7 @@ export async function sendLLMStreamRequest(
         followUpCount?: number;
         debugSessionId?: string;
     usageReason?: UsageReason;
+    usageSource?: "chat" | "background" | "qa";
         signal?: AbortSignal;
         privateMemory?: ConsolidationRun;
     },
@@ -917,7 +920,7 @@ export async function sendLLMStreamRequest(
     const detachExternalAbort = attachExternalAbort(llmAbort, options?.signal);
 
     try {
-        const response = await fetchLlmPayload(request, { signal: llmAbort.signal, usageContext: { provider: config.provider, model: config.defaultModel, configId: config.id, source: apiLogChannelFor(options).channel === "qa" ? "qa" : "chat", scopeId: options?.debugSessionId, reason: options?.usageReason ?? "unknown" } });
+        const response = await fetchLlmPayload(request, { signal: llmAbort.signal, usageContext: { provider: config.provider, model: config.defaultModel, configId: config.id, source: options?.usageSource ?? (apiLogChannelFor(options).channel === "qa" ? "qa" : "chat"), scopeId: options?.debugSessionId, reason: options?.usageReason ?? "unknown" } });
         if (!response.ok) {
             const errorText = await response.text();
             throw new ChatEngineError(`API Stream Error ${response.status}: ${errorText}`);
@@ -1002,6 +1005,7 @@ export async function sendLLMRequest(
         followUpCount?: number;
         debugSessionId?: string;
     usageReason?: UsageReason;
+    usageSource?: "chat" | "background" | "qa";
         signal?: AbortSignal;
         privateMemory?: ConsolidationRun;
     },
@@ -1043,7 +1047,7 @@ export async function sendLLMRequest(
     const detachExternalAbort = attachExternalAbort(llmAbort, options?.signal);
 
     try {
-        const response = await fetchLlmPayload(request, { signal: llmAbort.signal, usageContext: { provider: config.provider, model: config.defaultModel, configId: config.id, source: apiLogChannelFor(options).channel === "qa" ? "qa" : "chat", scopeId: options?.debugSessionId, reason: options?.usageReason ?? "unknown" } });
+        const response = await fetchLlmPayload(request, { signal: llmAbort.signal, usageContext: { provider: config.provider, model: config.defaultModel, configId: config.id, source: options?.usageSource ?? (apiLogChannelFor(options).channel === "qa" ? "qa" : "chat"), scopeId: options?.debugSessionId, reason: options?.usageReason ?? "unknown" } });
 
         if (!response.ok) {
             const errorText = await response.text();
@@ -1205,6 +1209,7 @@ export async function sendLLMToolStreamRequest(
         followUpCount?: number;
         debugSessionId?: string;
     usageReason?: UsageReason;
+    usageSource?: "chat" | "background" | "qa";
         signal?: AbortSignal;
         privateMemory?: ConsolidationRun;
         /** 单次最大输出 token：按调用覆盖预设值（工坊输出护栏用） */
@@ -1231,7 +1236,7 @@ export async function sendLLMToolStreamRequest(
     const firedToolCallStarts = new Set<number>();
 
     try {
-        const response = await fetchLlmPayload(request, { signal: llmAbort.signal, usageContext: { provider: config.provider, model: config.defaultModel, configId: config.id, source: apiLogChannelFor(options).channel === "qa" ? "qa" : "chat", scopeId: options?.debugSessionId, reason: options?.usageReason ?? "unknown" } });
+        const response = await fetchLlmPayload(request, { signal: llmAbort.signal, usageContext: { provider: config.provider, model: config.defaultModel, configId: config.id, source: options?.usageSource ?? (apiLogChannelFor(options).channel === "qa" ? "qa" : "chat"), scopeId: options?.debugSessionId, reason: options?.usageReason ?? "unknown" } });
 
         if (!response.ok) {
             const errorText = await response.text();
@@ -1372,6 +1377,7 @@ export async function sendLLMToolRequest(
         followUpCount?: number;
         debugSessionId?: string;
     usageReason?: UsageReason;
+    usageSource?: "chat" | "background" | "qa";
         signal?: AbortSignal;
         privateMemory?: ConsolidationRun;
     },
@@ -1387,7 +1393,7 @@ export async function sendLLMToolRequest(
     const detachExternalAbort = attachExternalAbort(llmAbort, options?.signal);
 
     try {
-        const response = await fetchLlmPayload(request, { signal: llmAbort.signal, usageContext: { provider: config.provider, model: config.defaultModel, configId: config.id, source: apiLogChannelFor(options).channel === "qa" ? "qa" : "chat", scopeId: options?.debugSessionId, reason: options?.usageReason ?? "unknown" } });
+        const response = await fetchLlmPayload(request, { signal: llmAbort.signal, usageContext: { provider: config.provider, model: config.defaultModel, configId: config.id, source: options?.usageSource ?? (apiLogChannelFor(options).channel === "qa" ? "qa" : "chat"), scopeId: options?.debugSessionId, reason: options?.usageReason ?? "unknown" } });
 
         if (!response.ok) {
             const errorText = await response.text();
@@ -2754,6 +2760,14 @@ export async function generateChatCompletion(
     options?: ChatPromptBuildOptions & { signal?: AbortSignal },
     callbacks?: ChatCompletionCallbacks,
 ): Promise<ChatCompletionResult> {
+    const turn = history[history.length - 1];
+    const tags = mergeAppTags(options?.appTags, options?.promptProfile?.appTags, options?.appId ?? "chat");
+    const characterId = resolveSessionCharacterId(session);
+    const feedback = !session.isGroup && !session.isBlacklisted && characterId && (options?.appId ?? "chat") === "chat"
+        && turn?.role === "user" && turn.sessionId === session.id && !turn.isRetracted && !["failed", "rejected"].includes(turn.status)
+        && !options?.followUpCount && !options?.timedWakeIntent && !options?.timedWakeElapsedMinutes && !options?.ephemeralSystemNote && !options?.periodCareContext
+        && !(tags ?? []).some(tag => ["followup", "offline", "life", "schedule", "timed_wake", "autonomous"].includes(tag))
+        ? prepareXinchaoFeedback({ sessionId: session.id, characterId, messageId: turn.id, createdAt: turn.createdAt }, options?.signal) : undefined;
     // 发送兜底（离线推送）：生成期间在服务端挂一张带心跳租约的保险单，
     // 本地完成即撤销；App 被杀则心跳停跳，服务端接管生成并推送。
     const privateMemorySlot: { current?: ConsolidationRun } = {};
@@ -2771,6 +2785,7 @@ export async function generateChatCompletion(
             try { await privateMemorySlot.current?.finish(); }
             catch (error) { notifyConsolidation(error instanceof Error ? error.message : "整理保存未确认，待处理进度已保留。"); }
         }
+        if (feedback && !options?.signal?.aborted && flattenCompletionResult(result).trim()) void feedback().catch(() => undefined);
         return result;
     } catch (err) {
         if (options?.signal?.aborted) bailoutRef.shortcutCancelled = true;

@@ -6,10 +6,13 @@ import { clearUsageLedger, getUsageLedger, summarizeUsage, USAGE_RETENTION_DAYS,
 import { loadApiConfigs } from "@/lib/settings-storage";
 import { queryProviderBalance, supportsBalance, type ProviderBalance } from "@/lib/provider-balance";
 import type { ApiConfig } from "@/lib/settings-types";
+import { loadUsageRates, summarizeUsageCost, estimateUsageCost } from "@/lib/usage-cost";
+import { UsageRateEditor } from "./usage-rate-editor";
 import styles from "./shared-memory.module.css";
 
-const sourceNames = { chat: "聊天与工具", background: "后台整理", embedding: "向量生成", qa: "工坊答疑", tool: "Codex 只读工具（不计模型 Token）", work: "独立工作区", private: "AI私人空间" };
+const sourceNames = { chat: "聊天与工具", background: "后台任务", embedding: "向量生成", qa: "工坊答疑", tool: "Codex 只读工具（不计模型 Token）", work: "独立工作区", private: "AI私人空间" };
 export function UsageLedgerPanel() {
+    const [rates, setRates] = useState<ReturnType<typeof loadUsageRates>>([]);
     const [rows, setRows] = useState<UsageLedgerEntry[]>([]);
     const [period, setPeriod] = useState<"day" | "month" | "all">("month");
     const [source, setSource] = useState("all");
@@ -23,7 +26,7 @@ export function UsageLedgerPanel() {
     const [busy, setBusy] = useState(false);
     const pending = useRef<AbortController | null>(null);
     useEffect(() => {
-        const refresh = () => { setRows(getUsageLedger()); setConfigs(loadApiConfigs()); };
+        const refresh = () => { setRows(getUsageLedger()); setConfigs(loadApiConfigs()); setRates(loadUsageRates()); };
         refresh(); window.addEventListener("float-usage-ledger-updated", refresh); window.addEventListener("focus", refresh);
         return () => { window.removeEventListener("float-usage-ledger-updated", refresh); window.removeEventListener("focus", refresh); pending.current?.abort(); };
     }, []);
@@ -33,6 +36,9 @@ export function UsageLedgerPanel() {
         return rows.filter(row => Date.parse(row.at) >= since && (source === "all" || row.source === source) && (model === "all" || `${row.provider} · ${row.model}` === model) && (!scope.trim() || row.scopeId === scope.trim()));
     }, [rows, period, source, model, scope]);
     const summary = summarizeUsage(filtered);
+    const cost = summarizeUsageCost(filtered, rates);
+    const money = (value: number) => value.toLocaleString("zh-CN", { maximumFractionDigits: 6 });
+    const rowCost = (row: UsageLedgerEntry) => { const estimate = estimateUsageCost(row, rates); return estimate ? `${money(estimate.amount)} ${estimate.currency}（当前手填费率）` : "未知"; };
     const amount = (key: keyof typeof summary.totals) => summary.reported[key] ? summary.totals[key].toLocaleString("zh-CN") : "未取得";
     const selected = configs.find(config => config.id === configId);
     const queryBalance = async () => {
@@ -44,7 +50,7 @@ export function UsageLedgerPanel() {
         finally { if (!controller.signal.aborted) setBusy(false); }
     };
     const exportRows = () => {
-        const url = URL.createObjectURL(new Blob([JSON.stringify({ schema: "float-usage/v1", exportedAt: new Date().toISOString(), entries: filtered }, null, 2)], { type: "application/json" }));
+        const url = URL.createObjectURL(new Blob([JSON.stringify({ schema: "float-usage/v1", exportedAt: new Date().toISOString(), costBasis: "current-manual-rates-not-invoice", manualRates: rates, costSummary: cost, entries: filtered.map(row => ({ ...row, estimatedCost: estimateUsageCost(row, rates) ?? null })) }, null, 2)], { type: "application/json" }));
         const link = document.createElement("a"); link.href = url; link.download = "float-usage.json"; link.click(); window.setTimeout(() => URL.revokeObjectURL(url), 1000);
     };
     return <section className={styles.root} aria-label="用量与缓存" style={{ marginTop: 16 }}><div className={styles.body}>
@@ -63,11 +69,13 @@ export function UsageLedgerPanel() {
         </div>
         <div className={styles.status}><div><span className={styles.statusTitle}>缓存命中率 {summary.cacheHitRate === undefined ? "未知" : `${(summary.cacheHitRate * 100).toFixed(1)}%`}</span><p className={styles.muted}>只计算同时取得输入与缓存数据的 {summary.cacheCoverage} 次调用。</p></div></div>
         <p className={styles.muted}>缓存读取 {amount("cached_tokens")} · 缓存创建 {amount("cache_creation_tokens")} · 推理细项 {amount("reasoning_tokens")}。这些细项不再加进接口总量。{summary.unknown} 次模型调用未取得任何用量，不能当作零消耗。{summary.toolRequests} 次 Codex 工具执行单列，不计模型 Token。没有可靠单价时费用保持未知。</p>
+        <p className={styles.muted}>按当前手填费率估算：{Object.entries(cost.totals).map(([currency, amount]) => `${money(amount!)} ${currency}`).join(" · ") || "未知"} · 可估算 {cost.priced} 次 / 未知 {cost.unknown} 次模型请求。</p>
+        <UsageRateEditor configs={configs} onChange={() => setRates(loadUsageRates())} />
         <details className={styles.fold}><summary>逐次调用与会话筛选</summary>
             <label className={styles.muted}>会话/轮次标识（可选，精确匹配）<input className={styles.input} aria-label="用量会话标识" value={scope} onChange={event => setScope(event.target.value)} placeholder="调用方提供的非正文标识" /></label>
             <p className={styles.muted}>只收集调用方提供的标识，缺失时无法按会话汇总；一次回复中的工具循环与重试按多次 HTTP 请求记账。</p>
             {!filtered.length && <p className={styles.muted}>此范围暂无已收集的调用，不代表历史上没有消耗。</p>}
-            {filtered.slice(-50).reverse().map(row => <article className={styles.draft} key={row.id}><p className={styles.cardTitle}>{row.provider} · {row.model}</p><p className={styles.muted}>{new Date(row.at).toLocaleString("zh-CN")} · {sourceNames[row.source]} · {row.status === "pending" ? "进行中/结果未决" : row.status === "completed" ? "请求完成" : row.status === "cancelled" ? "已取消" : "请求失败"}</p><p className={styles.muted}>调用原因：{USAGE_REASON_LABELS[row.reason || "unknown"]}</p><p className={styles.muted}>输入 {row.usage?.prompt_tokens ?? "未知"} / 输出 {row.usage?.completion_tokens ?? "未知"} / 缓存 {row.usage?.cached_tokens ?? "未知"}{row.scopeId ? ` · 标识 ${row.scopeId}` : ""}</p></article>)}
+            {filtered.slice(-50).reverse().map(row => <article className={styles.draft} key={row.id}><p className={styles.cardTitle}>{row.provider} · {row.model}</p><p className={styles.muted}>{new Date(row.at).toLocaleString("zh-CN")} · {sourceNames[row.source]} · {row.status === "pending" ? "进行中/结果未决" : row.status === "completed" ? "请求完成" : row.status === "cancelled" ? "已取消" : "请求失败"}</p><p className={styles.muted}>调用原因：{USAGE_REASON_LABELS[row.reason || "unknown"]}</p><p className={styles.muted}>费用估算 {rowCost(row)} · 输入 {row.usage?.prompt_tokens ?? "未知"} / 输出 {row.usage?.completion_tokens ?? "未知"} / 缓存 {row.usage?.cached_tokens ?? "未知"}{row.scopeId ? ` · 标识 ${row.scopeId}` : ""}</p></article>)}
             <div className={styles.row}><button type="button" className={styles.button} onClick={exportRows}><Download size={12} aria-hidden="true" />导出当前统计</button><button type="button" className={styles.quiet} onClick={() => setClear(true)}>清空本机统计</button></div>
             {clear && <div className={styles.row}><span className={styles.muted}>只清统计，不清聊天或记忆。</span><button type="button" className={styles.danger} onClick={() => { clearUsageLedger(); setClear(false); }}>确认清空统计</button><button type="button" className={styles.quiet} onClick={() => setClear(false)}>取消</button></div>}
         </details>

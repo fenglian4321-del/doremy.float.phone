@@ -94,7 +94,7 @@ try {
     const iconSource = readFileSync(new URL('../lib/desktop-config.ts', import.meta.url), 'utf8');
     assert.match(iconSource, /PAGE_4_DEFAULT[^\n]*"xinchao"/);
     const component = readFileSync(new URL('../components/xinchao/xinchao-app.tsx', import.meta.url), 'utf8');
-    assert.match(component, /checked=\{false\} disabled/); assert.ok(!/setInterval|EventSource|runChat|writeMemory/.test(component));
+    assert.match(component, /XinchaoProactivePanel/); assert.ok(!/setInterval|EventSource|runChat|writeMemory/.test(component));
     for (const path of ['../lib/workspace-client.ts', '../lib/llm-prompt-assembler.ts']) assert.ok(!readFileSync(new URL(path, import.meta.url), 'utf8').includes('xinchao'));
     console.log('Xinchao 4.3.0 read-only: real local HTTP, strict version/config, fixed GETs, projection, hidden credentials, owner cookie, origin/body rejection and off-by-default scope passed. No VPS/model accessed.');
 } finally { const done = new Promise(r => fixture.close(r)); fixture.closeAllConnections(); await done; }

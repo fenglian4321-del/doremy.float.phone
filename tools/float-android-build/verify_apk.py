@@ -19,8 +19,8 @@ def main():
     parser.add_argument("--stage", required=True)
     parser.add_argument("--site-url", default="https://float.fanqielove.duckdns.org")
     args = parser.parse_args()
-    if not re.fullmatch(r"phase[1-9][0-9]*", args.stage):
-        raise ValueError("Expected a phase number")
+    if not re.fullmatch(r"(?:phase[1-9][0-9]*|final)", args.stage):
+        raise ValueError("Expected a phase number or final")
     root, apk, output = args.toolchain_root.resolve(), args.apk.resolve(), args.outdir.resolve()
     repo = Path(__file__).resolve().parents[2]
     if not apk.is_relative_to(repo / "android-shell/app/build/outputs/apk") or not apk.is_file():
@@ -45,7 +45,10 @@ def main():
         raise RuntimeError("Expected one verified v2 signer")
     badging = capture([str(sdk / "aapt2.exe"), "dump", "badging", str(apk)], "apk-badging.log")
     package = re.search(r"package: name='([^']+)' versionCode='(\d+)' versionName='([^']+)'", badging)
-    if not package or package.group(1) != "app.floatphone.shell" or package.group(2) != "29" or package.group(3) != "1.0.30":
+    build_source = (repo / "android-shell/app/build.gradle").read_text(encoding="utf-8")
+    expected_code = re.search(r"versionCode\s+(\d+)", build_source).group(1)
+    expected_version = re.search(r'versionName\s+"([^"]+)"', build_source).group(1)
+    if not package or package.group(1) != "app.floatphone.shell" or package.group(2) != expected_code or package.group(3) != expected_version:
         raise RuntimeError("APK package or version differs from the intended build")
     if not re.search(r"(?:minSdkVersion|sdkVersion):'26'", badging) or "targetSdkVersion:'34'" not in badging or "application-debuggable" not in badging or "compileSdkVersion='36'" not in badging:
         raise RuntimeError("Expected min26/target34 debug test build")
@@ -97,14 +100,14 @@ def main():
         if any(name.lower().endswith((".keystore", ".jks", ".p12", ".pfx", ".key")) for name in names):
             raise RuntimeError("Unexpected private key artifact in APK")
         dex = b"\n".join(bundle.read(name) for name in names if re.fullmatch(r"classes[0-9]*\.dex", name))
-        required = [site, "ScopedFilesBridge", "getScopedFilesCapabilities", "requestScopedDirectory", "submitScopedFiles", "getScopedFilesResult", "verifyScopedFiles", "cancelScopedFiles"]
+        required = [site, "ScopedFilesBridge", "getScopedFilesCapabilities", "requestScopedDirectory", "submitScopedFiles", "getScopedFilesResult", "verifyScopedFiles", "cancelScopedFiles", "DeviceUiBridge", "invalidateDocument", "getDeviceUiCapabilities", "requestDeviceUiGrant", "activateDeviceUiGrant", "submitDeviceUi", "getDeviceUiResult", "getDeviceUiReceipt", "cancelDeviceUi", "revokeDeviceUiGrant", "XinchaoOfflineWake", "getXinchaoOfflineWakeStatus", "setXinchaoOfflineWakeEnabled"]
         if not all(value.encode("ascii") in dex for value in required):
             raise RuntimeError("Site or scoped native bridge missing from compiled DEX")
         if bundle.testzip() is not None:
             raise RuntimeError("Corrupt APK archive")
-    result = {"format": "float-local-test-apk/v1", "stage": args.stage, "applicationId": package.group(1), "versionCode": 29, "versionName": "1.0.30", "site": site, "compileSdk": 36, "minSdk": 26, "targetSdk": 34, "debuggable": True, "automaticBackup": False, "bytes": apk.stat().st_size, "sha256": hash_file(apk), "signature": {"verified": True, "schemeV2": True, "certificateSha256": cert.group(1).lower(), "existingInstallationCompatibility": "unknown"}, "permissions": permissions, "platformImpliedPermissions": implied, "compiledScopedBridge": True, "deviceValidated": False, "installed": False, "aiPhoneFilesDefaultOff": True}
+    result = {"format": "float-local-test-apk/v1", "stage": args.stage, "applicationId": package.group(1), "versionCode": int(package.group(2)), "versionName": package.group(3), "site": site, "compileSdk": 36, "minSdk": 26, "targetSdk": 34, "debuggable": True, "automaticBackup": False, "bytes": apk.stat().st_size, "sha256": hash_file(apk), "signature": {"verified": True, "schemeV2": True, "certificateSha256": cert.group(1).lower(), "existingInstallationCompatibility": "unknown"}, "permissions": permissions, "platformImpliedPermissions": implied, "compiledScopedBridge": True, "compiledDeviceUiBridge": True, "compiledXinchaoOfflineWake": True, "deviceValidated": False, "installed": False, "aiPhoneFilesDefaultOff": True}
     output.mkdir(parents=True, exist_ok=True)
-    name = "float-" + args.stage + "-1.0.30-debug.apk"
+    name = "float-" + args.stage + "-" + package.group(3) + "-debug.apk"
     with apk.open("rb") as source_apk, (output / name).open("xb") as target:
         shutil.copyfileobj(source_apk, target)
     if hash_file(output / name) != result["sha256"]:

@@ -31,7 +31,7 @@ const helpers = load('../lib/api-helpers.ts', { './usage-fetch': usage, './token
 const adapter = load('../lib/llm-provider-adapter.ts', { './api-helpers': helpers, './generation-parameters': { resolveEnabledGenerationParameters: () => new Set() }, './token-usage': tokens });
 const http = load('../lib/llm-http.ts', { './usage-fetch': usage });
 const budget = load('../lib/consolidation-budget.ts', { './token-counter': load('../lib/token-counter.ts') });
-const client = load('../lib/workspace-client.ts', { './kv-db': db, './phone-file-tools': tools, './llm-provider-adapter': adapter, './llm-http': http, './consolidation-budget': budget });
+const client = load('../lib/workspace-client.ts', { './kv-db': db, './phone-file-tools': tools, './llm-provider-adapter': adapter, './llm-http': http, './consolidation-budget': budget, './phone-device-tools':{getPhoneDeviceSession:()=>null,phoneDeviceRunPending:()=>false,clearPhoneDeviceRun:()=>{},disablePhoneDeviceTools:()=>{}},'./managed-mcp-session': { getManagedMcpSession: () => null, managedMcpSessionPreparing: () => false, managedMcpRunPending: () => false, clearManagedMcpRun: noop, disableManagedMcpSession: noop } });
 const env = Object.fromEntries(['PATH', 'Path', 'SystemRoot', 'TEMP', 'TMP'].filter(key => process.env[key]).map(key => [key, process.env[key]]));
 const child = spawn(process.env.FLOAT_TEST_PYTHON || 'python', [fileURLToPath(new URL('../tools/float-memory-review/workspace_test_host.py', import.meta.url))], { windowsHide: true, env: { ...env, PYTHONUTF8: '1', ...(process.env.FLOAT_TEST_WORK_DIR ? { FLOAT_TEST_WORK_DIR: process.env.FLOAT_TEST_WORK_DIR } : {}) }, stdio: ['ignore', 'pipe', 'pipe'] });
 let stderr = '';

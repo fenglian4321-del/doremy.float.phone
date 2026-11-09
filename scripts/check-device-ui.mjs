@@ -1,0 +1,35 @@
+import assert from 'node:assert/strict';
+import { readFileSync, mkdirSync, mkdtempSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const read = name => readFileSync(path.join(root, name), 'utf8');
+const dir = 'android-shell/app/src/main/java/app/floatphone/shell/';
+const native = read(dir + 'DeviceUiBridge.kt'), activity = read(dir + 'MainActivity.kt');
+for (const method of ['getDeviceUiCapabilities', 'requestDeviceUiGrant', 'getDeviceUiGrant', 'activateDeviceUiGrant', 'submitDeviceUi', 'getDeviceUiResult', 'getDeviceUiReceipt', 'cancelDeviceUi', 'revokeDeviceUiGrant']) assert.match(activity, new RegExp('@JavascriptInterface\\s+fun ' + method + '\\('));
+assert.match(activity, /SecureJavascriptBridge\(ShellBridge\(\)\)/);
+assert.ok(!/addJavascriptInterface\(.*deviceUi/i.test(activity));
+assert.match(activity, /ACTION_PICK_ACTIVITY/);
+assert.match(activity, /override fun onPageStarted[\s\S]{0,250}deviceUi\.invalidateDocument\(\)/);
+assert.match(native, /fun invalidateDocument\(\)[\s\S]*job\.cancelled = true[\s\S]*grants\.clear\(\); snapshots\.clear\(\)/);
+assert.match(native, /taskDigest != value.taskDigest/);
+assert.match(native, /result.optString\("taskDigest"\) != value.taskDigest/);
+assert.match(native, /getCookie\(endpoint\)/);
+assert.match(native, /followRedirects\(false\)/);
+assert.match(native, /SystemClock.elapsedRealtime/);
+assert.match(native, /TYPE_ACCESSIBILITY_OVERLAY/);
+assert.match(native, /if \(!accepted\) fail\("review_declined"\)/);
+assert.ok(native.indexOf('putString(key, intent.toString()).commit()') < native.indexOf('performGlobalAction'));
+assert.ok(native.indexOf('capture(value).fingerprint != snapshot.fingerprint') < native.indexOf('ACTION_SET_TEXT,'));
+assert.ok(!/Runtime\.getRuntime|ProcessBuilder|dispatchGesture|takeScreenshot|ACTION_IME_ENTER/.test(native));
+assert.ok(!native.includes('error.message'));
+if (process.argv.includes('--compile-policy')) {
+    const workRoot = path.resolve(process.env.FLOAT_TEST_WORK_DIR || path.join(root, 'work'));
+    mkdirSync(workRoot, { recursive: true }); const output = mkdtempSync(path.join(workRoot, 'device-ui-policy-'));
+    const compiler = spawnSync(process.env.FLOAT_TEST_JAVAC || 'javac', ['--release', '11', '-encoding', 'UTF-8', '-d', output, path.join(root, dir, 'DeviceUiPolicy.java'), path.join(root, 'android-shell/policy-test/DeviceUiPolicyTest.java')], { encoding: 'utf8', windowsHide: true });
+    if (compiler.error || compiler.status !== 0) throw Error(compiler.error?.message || compiler.stderr);
+    const tested = spawnSync(process.env.FLOAT_TEST_JAVA || 'java', ['-cp', output, 'DeviceUiPolicyTest'], { encoding: 'utf8', windowsHide: true });
+    if (tested.status !== 0) throw Error(tested.stderr || 'Policy fixtures failed'); process.stdout.write(tested.stdout);
+}
+console.log('Device UI secure dispatch and no replay guards checked; real phone acceptance remains separate.');

@@ -53,6 +53,13 @@ class PushService : Service() {
             if (Build.VERSION.SDK_INT >= 26) context.startForegroundService(intent)
             else context.startService(intent)
         }
+        fun refreshXinchaoWake(context: Context) {
+            if (!running && !XinchaoOfflineWake.enabled(context)) return
+            val intent = Intent(context, PushService::class.java)
+            if (running) context.startService(intent)
+            else if (Build.VERSION.SDK_INT >= 26) context.startForegroundService(intent)
+            else context.startService(intent)
+        }
     }
 
     private val client = OkHttpClient.Builder()
@@ -71,6 +78,18 @@ class PushService : Service() {
     private var msgSeq = 2
     private var notifId = 100
     private var shellSubRegistered = false
+    private var xinchaoWake: XinchaoOfflineWake? = null
+    private fun refreshXinchaoWake() {
+        if (!XinchaoOfflineWake.enabled(this)) { xinchaoWake?.close(); xinchaoWake = null; return }
+        if (xinchaoWake?.running == true) return
+        xinchaoWake?.close()
+        xinchaoWake = XinchaoOfflineWake(this) { id, session ->
+            val notification = NotificationCompat.Builder(this, CH_MESSAGES).setSmallIcon(R.drawable.ic_stat)
+                .setContentTitle("心潮 · 有一条新动态").setContentText("打开 Float 后，由你选择的模型接着聊。")
+                .setAutoCancel(true).setOnlyAlertOnce(true).setContentIntent(contentIntent(session)).build()
+            getSystemService(NotificationManager::class.java).notify("xinchao_wake_" + id, 4301, notification)
+        }.also { it.start() }
+    }
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -80,14 +99,16 @@ class PushService : Service() {
         createChannels()
         startForeground(NOTIF_FG_ID, buildKeepAliveNotification("等待连接…"))
         thread(name = "shell-push-loop") { connectionLoop() }
+        refreshXinchaoWake()
     }
 
-    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int = START_STICKY
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int { refreshXinchaoWake(); return START_STICKY }
 
     override fun onDestroy() {
         stopped = true
         running = false
         socket?.cancel()
+        xinchaoWake?.close(); xinchaoWake = null
         super.onDestroy()
     }
 
@@ -97,7 +118,7 @@ class PushService : Service() {
         while (!stopped) {
             val config = fetchConfig()
             if (config == null) {
-                updateKeepAlive("未登录或站点不可达，稍后重试")
+                updateKeepAlive(if (XinchaoOfflineWake.enabled(this)) "心潮离线提醒已启用，等待动态" else "未登录或站点不可达，稍后重试")
                 sleepSec(60); continue
             }
             updateKeepAlive("已连接，等待角色消息")

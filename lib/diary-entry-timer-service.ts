@@ -17,6 +17,7 @@ export const DIARY_ENTRY_TIMER_SETTINGS_UPDATED_EVENT = "diary-entry-timer-setti
 
 let stopInterval: (() => void) | null = null;
 let running = false;
+let currentGeneration: AbortController | null = null;
 
 function dispatchGlobalNotice(message: string): void {
   if (typeof window === "undefined") return;
@@ -75,16 +76,23 @@ export async function runDiaryEntryTimerCheck(): Promise<void> {
   if (dueTargets.length === 0) return;
 
   running = true;
-  const attemptedIds = dueTargets.map(character => character.id);
-  const stamp = new Date().toISOString();
+  const controller = new AbortController(); currentGeneration = controller;
   let createdCount = 0;
   const createdNames: string[] = [];
   const failedNames: string[] = [];
 
   try {
     for (const character of dueTargets) {
+      // A switch change or stop must also fence the already captured batch.
+      if (controller.signal.aborted || !getDueTargets(loadDiaryEntryTimerSettings()).some(target => target.id === character.id)) break;
       try {
-        const draft = await generateDiaryEntryForCharacter(character.id, loadDiaryEntries(), "timer");
+        // Reserve before HTTP: closing/reloading during an unknown result must
+        // not immediately request the same scheduled diary a second time.
+        stampAttemptedCharacters([character.id], new Date().toISOString());
+        const draft = await generateDiaryEntryForCharacter(character.id, loadDiaryEntries(), "timer", { signal: controller.signal });
+        controller.signal.throwIfAborted();
+        const latest = loadDiaryEntryTimerSettings();
+        if (!latest.enabled || !resolveTimerTargets(latest, loadCharacters()).some(target => target.id === character.id)) break;
         createDiaryEntry({
           characterId: character.id,
           characterName: character.name,
@@ -98,13 +106,12 @@ export async function runDiaryEntryTimerCheck(): Promise<void> {
         });
         createdCount += 1;
         createdNames.push(character.name);
-      } catch (error) {
+      } catch {
+        if (controller.signal.aborted) break;
         failedNames.push(character.name);
-        console.warn("[DiaryEntryTimer] failed to generate diary entry:", character.name, error);
+        console.warn("[DiaryEntryTimer] scheduled generation failed; request was not retried.");
       }
     }
-
-    stampAttemptedCharacters(attemptedIds, stamp);
 
     if (createdCount > 0 || failedNames.length > 0) {
       dispatchEntriesUpdated(createdCount, failedNames.length);
@@ -117,6 +124,7 @@ export async function runDiaryEntryTimerCheck(): Promise<void> {
       dispatchGlobalNotice(`定时日记生成失败：${failedNames.join("、")}`);
     }
   } finally {
+    if (currentGeneration === controller) currentGeneration = null;
     running = false;
   }
 }
@@ -127,6 +135,7 @@ function handleVisibilityChange(): void {
 }
 
 function handleSettingsUpdated(): void {
+  currentGeneration?.abort();
   void runDiaryEntryTimerCheck();
 }
 
@@ -141,6 +150,7 @@ export function startDiaryEntryTimerService(): void {
 }
 
 export function stopDiaryEntryTimerService(): void {
+  currentGeneration?.abort();
   if (stopInterval) {
     stopInterval();
     stopInterval = null;

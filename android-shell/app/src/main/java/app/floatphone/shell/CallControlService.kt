@@ -32,12 +32,15 @@ import java.util.concurrent.TimeUnit
  * - 达到阈值后把事件放入持久队列，经站点登录态 API 写入个人云现实桥收件箱；
  * - 云端继续复用既有 push-bridge 规则匹配、冷却、角色回复和推送链路。
  *
- * 本服务只读取前台包名，不读取其他应用界面内容。用户关闭「前台应用」感知或总开关后，
- * 原生计时立即停止。Android/厂商仍可能在强制停止、关闭无障碍权限或杀进程时中断服务。
+ * 自动感知只读取前台包名。DeviceUiBridge 另需用户逐任务授权，才按需读取所选应用结构；
+ * 不从本服务的事件/计时循环读取界面。用户关闭「前台应用」感知或总开关后原生计时立即停止。
+ * Android/厂商仍可能在强制停止、关闭无障碍权限或杀进程时中断服务。
  */
 class CallControlService : AccessibilityService() {
 
     companion object {
+        @Volatile private var activeUiService: CallControlService? = null
+        internal fun forDeviceUi(): CallControlService? = if (connected) activeUiService else null
         @Volatile
         var connected: Boolean = false
             private set
@@ -71,6 +74,7 @@ class CallControlService : AccessibilityService() {
     override fun onServiceConnected() {
         super.onServiceConnected()
         connected = true
+        activeUiService = this
         ScreenshotBridge.attach(this)
         ShellBus.dispatchOverlayEvent("accessibility", JSONObject().put("connected", true))
 
@@ -345,8 +349,17 @@ class CallControlService : AccessibilityService() {
         // 无需处理：本服务不阻塞任何交互
     }
 
+    override fun onUnbind(intent: Intent?): Boolean {
+        connected = false
+        if (activeUiService === this) activeUiService = null
+        handler.removeCallbacks(dwellTicker)
+        ScreenshotBridge.attach(null)
+        return super.onUnbind(intent)
+    }
+
     override fun onDestroy() {
         connected = false
+        if (activeUiService === this) activeUiService = null
         handler.removeCallbacks(dwellTicker)
         ScreenshotBridge.attach(null)
         super.onDestroy()

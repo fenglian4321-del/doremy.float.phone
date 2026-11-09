@@ -21,7 +21,7 @@
 .page input:disabled { cursor: default; opacity: .6; }
 .page input:focus-visible,.page button:focus-visible { outline: 2px solid #7a9e8d; outline-offset: 3px; }
 .note { font-size: 10px; line-height: 1.85; color: #8a958a; margin: 13px 0 0; }
-.sectionTitle { display: flex; align-items: center; justify-content: space-between; margin: 22px 2px 14px; gap: 10px; }
+.sectionTitle { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; margin: 22px 2px 14px; gap: 10px; }
 .sectionTitle span { font-size: 10px; color: #829382; }
 .card .sectionTitle { margin: 0 0 19px; }
 .page button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; font-size: 11px; background: #e6ede3; color: #52725f; border: 1px solid #d7e2d3; border-radius: 10px; padding: 8px 11px; }
@@ -44,4 +44,9 @@
 .identity input { width: 100%; border: 1px solid #d6e1d2; border-radius: 9px; padding: 10px; margin-top: 7px; background: #fafff7; font-size: 12px; color: #45654d; }
 .binding { display: block; font-size: 11px; margin-top: 18px; color: #758a78; }
 .binding select { display: block; width: 100%; padding: 9px; border-radius: 9px; border: 1px solid #d6e1d2; background: #fafff7; color: #45654d; margin-top: 9px; font-size: 12px; }
+.binding input { display: block; width: 100%; box-sizing: border-box; padding: 9px; margin-top: 8px; border: 1px solid #d6e1d2; border-radius: 9px; background: #fafff7; color: #45654d; }
+.inbox { margin: 15px 0 0; padding: 0; list-style: none; }
+.inbox li { padding: 12px 0; border-top: 1px solid #dce5d9; font-size: 11px; }
+.inbox small { display: block; color: #829383; margin: 7px 0; }
+.inbox li div { display: flex; flex-wrap: wrap; gap: 8px; }
 @media (max-width: 350px) { .page { padding-inline: 12px; } .hero h1 { font-size: 23px; } }

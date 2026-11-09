@@ -50,3 +50,7 @@ android-shell/**/build/
 
 # Task-local scratch files are not repository source.
 /work/
+
+# Python tooling caches are local build state.
+__pycache__/
+*.pyc

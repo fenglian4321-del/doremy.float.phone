@@ -31,13 +31,10 @@ import { resolveAuxiliaryApiConfig, resolveUserIdentity } from "@/lib/settings-s
 import { generateEmbedding, resolveEmbeddingModel } from "@/lib/memory-embedding";
 import { BINDING_ACCENTS } from "@/lib/ui-accent-colors";
 import { memorySourceLabel } from "@/lib/memory-injector";
-import { SharedMemoryPanel } from "./shared-memory-panel";
 import sharedMemoryStyles from "./shared-memory.module.css";
 import { UsageLedgerPanel } from "./usage-ledger-panel";
 import { CodexGatewayPanel } from "./codex-gateway-panel";
 import { SharedConsolidationPanel } from "./shared-consolidation-panel";
-import { WorkspacePanel } from "./workspace-panel";
-import { spaceUiMode, setSpaceUiMode, type SpaceKind } from "@/lib/workspace-client";
 import workspaceStyles from "./workspace.module.css";
 
 type MemoryView = "list" | "detail" | "settings";
@@ -206,10 +203,7 @@ type Props = {
 };
 
 export function MemoryBankPage(props: Props) {
-    const [mode, setMode] = useState<'life' | SpaceKind>(spaceUiMode);
-    const changeMode = (next: 'life' | SpaceKind) => { setSpaceUiMode(next); setMode(next); };
-    if (mode !== 'life') return <WorkspacePanel key={mode} kind={mode} onBack={() => changeMode('life')} />;
-    return <><button type="button" className={workspaceStyles.entry} onClick={() => changeMode('work')}>独立工作区 <span>工作对话与文件 · 不自动读写生活记忆</span></button><button type="button" className={workspaceStyles.entry} onClick={() => changeMode('private')}>AI私人空间 <span>日记、笔记、项目 · 可查看、编辑和导出</span></button><LifeMemoryBankPage {...props} /></>;
+    return <><button type="button" className={workspaceStyles.entry} onClick={() => window.dispatchEvent(new CustomEvent('open-app', { detail: { appId: 'workspace' } }))}>工作区 <span>打开独立的 AI 任务会话</span></button><button type="button" className={workspaceStyles.entry} onClick={() => window.dispatchEvent(new CustomEvent('open-app', { detail: { appId: 'memorysky' } }))}>记忆星图 <span>打开星海 · 查看和修改 VPS 共享记忆</span></button><LifeMemoryBankPage {...props} /></>;
 }
 
 function LifeMemoryBankPage({
@@ -747,7 +741,7 @@ function LifeMemoryBankPage({
     // ── Detail View ──
     if (config.memorySource === "shared" && view !== "settings") {
         return <div className={`page-menu memory-settings-menu ${sharedMemoryStyles.page}`}>
-            <SharedMemoryPanel source="shared" onSourceChange={changeMemorySource} initiallyOpen recallMode={config.automaticRecallEnabled === false ? "off" : config.sharedRecallMode ?? "ombre"} onRecallModeChange={changeSharedRecall} />
+            <button type="button" className={workspaceStyles.entry} onClick={() => window.dispatchEvent(new CustomEvent("open-app", { detail: { appId: "memorysky" } }))}>打开记忆星图 <span>查看、纠错与整理共享记忆</span></button>
             <CodexGatewayPanel shared />
             <SharedConsolidationPanel />
             <UsageLedgerPanel />
@@ -965,7 +959,7 @@ function LifeMemoryBankPage({
 
     // ── Settings View ──
     if (loadMemoryConfig().memorySource === "shared" && view === "settings") return <div className={`page-menu memory-settings-menu ${sharedMemoryStyles.page}`}>
-        <SharedMemoryPanel source="shared" onSourceChange={changeMemorySource} recallMode={config.automaticRecallEnabled === false ? "off" : config.sharedRecallMode ?? "ombre"} onRecallModeChange={changeSharedRecall} />
+        <button type="button" className={workspaceStyles.entry} onClick={() => window.dispatchEvent(new CustomEvent("open-app", { detail: { appId: "memorysky" } }))}>打开记忆星图 <span>查看、纠错与整理共享记忆</span></button>
         <SharedConsolidationPanel /><CodexGatewayPanel shared /><UsageLedgerPanel />
     </div>;
     if (view === "settings") {
@@ -1010,7 +1004,7 @@ function LifeMemoryBankPage({
                     </div>
                 </div>
                 <p className="menu-group-desc mx-2">共享服务</p>
-                <SharedMemoryPanel source={config.memorySource ?? "local"} onSourceChange={changeMemorySource} recallMode={config.automaticRecallEnabled === false ? "off" : config.sharedRecallMode ?? "ombre"} onRecallModeChange={changeSharedRecall} />
+                <button type="button" className={workspaceStyles.entry} onClick={() => window.dispatchEvent(new CustomEvent("open-app", { detail: { appId: "memorysky" } }))}>打开记忆星图 <span>查看、纠错与整理共享记忆</span></button>
                 <CodexGatewayPanel shared={config.memorySource === "shared"} />
                 <UsageLedgerPanel />
                 <p className="menu-group-desc mx-2">上方开关仅控制本设备自动化。“共享”页签仍表示 Float 共同事件；Orbis 导入位于 VPS 共享记忆面板。</p>

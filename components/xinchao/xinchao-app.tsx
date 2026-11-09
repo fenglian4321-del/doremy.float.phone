@@ -8,7 +8,9 @@ import type { XinchaoSnapshot } from '@/lib/xinchao-types';
 import { loadChatSessions, resolveSessionCharacterId } from '@/lib/chat-storage';
 import { loadCharacters } from '@/lib/character-storage';
 import { setXinchaoChatSettings, subscribeXinchaoChat, xinchaoChatSettings, xinchaoChatStatus, type XinchaoChatSettings } from '@/lib/xinchao-chat';
+import { checkLastXinchaoFeedback, checkXinchaoFeedbackAvailable, setXinchaoFeedbackSettings, subscribeXinchaoFeedback, xinchaoFeedbackSettings, xinchaoFeedbackStatus, type XinchaoFeedbackSettings } from '@/lib/xinchao-feedback';
 import styles from './xinchao.module.css';
+import { XinchaoProactivePanel } from './proactive-panel';
 
 const time = (at: string) => new Date(at).toLocaleString('zh-CN', { hour12: false });
 export function XinchaoApp({ onClose }: { onClose: () => void }) {
@@ -17,6 +19,9 @@ export function XinchaoApp({ onClose }: { onClose: () => void }) {
     const [error, setError] = useState(''), [unauthorized, setUnauthorized] = useState(false), [token, setToken] = useState('');
     const [chatSettings, setChatSettings] = useState<XinchaoChatSettings>({ enabled: false, sessionId: '', characterId: '' });
     const [chatChoices, setChatChoices] = useState<{ id: string; characterId: string; label: string }[]>([]), [chatStatus, setChatStatus] = useState('尚未使用心潮聊天状态。');
+    const [feedback, setFeedback] = useState<XinchaoFeedbackSettings>({ enabled: false, sessionId: '', characterId: '', revision: '' });
+    const [feedbackAvailable, setFeedbackAvailable] = useState(false), [feedbackBusy, setFeedbackBusy] = useState(false), [feedbackNote, setFeedbackNote] = useState('尚未启用对话反馈。');
+    useEffect(() => { const update = () => { setFeedback(xinchaoFeedbackSettings()); setFeedbackNote(xinchaoFeedbackStatus()); }; update(); return subscribeXinchaoFeedback(update); }, []);
     const pending = useRef<AbortController | null>(null), generation = useRef(0), allowed = useRef(false);
     const cancel = useCallback(() => { generation.current++; pending.current?.abort(); pending.current = null; }, []);
     const refresh = useCallback(async (ownerToken?: string) => {
@@ -92,9 +97,14 @@ export function XinchaoApp({ onClose }: { onClose: () => void }) {
                 <label className={styles.binding}>绑定生活私聊<select aria-label="心潮绑定生活私聊" value={chatSettings.sessionId} onChange={event => { const selected = chatChoices.find(item => item.id === event.target.value); setXinchaoChatSettings({ enabled: false, sessionId: selected?.id || '', characterId: selected?.characterId || '' }); }}><option value="">由你选择，不自动绑定</option>{chatSettings.sessionId && !chatChoices.some(item => item.id === chatSettings.sessionId) && <option value={chatSettings.sessionId}>原绑定对话不可用</option>}{chatChoices.map(item => <option key={item.id} value={item.id}>{item.label}</option>)}</select></label>
                 <p className={styles.note}>开启后，新用户消息生成前读取一次“此刻”，交给该私聊当前模型作临时参考，不增加模型请求。需要有效本人会话，可在上方打开查看完成验证。失败继续聊天。查看开关与聊天开关独立，关闭不撤回已发送上下文。</p>
                 <p className={styles.note} role="status">{chatStatus}</p>
-                {['对话互动反馈', '主动消息'].map(label => <label key={label} className={styles.future}><span>{label}<small>后续接入，当前关闭</small></span><input type="checkbox" role="switch" aria-label={label} checked={false} disabled readOnly /></label>)}
-                <p className={styles.note}>工作区、AI私人空间、群聊和后台唤醒不自动接入；当前不回报对话或开启身体模拟。</p>
+                <label className={styles.future}><span>对话互动反馈<small>独立开关；真实对话在场与普通互动</small></span><input type="checkbox" role="switch" aria-label="对话互动反馈" checked={feedback.enabled} disabled={!ready || (!feedback.enabled && (!feedbackAvailable || !chatChoices.some(item => item.id === feedback.sessionId && item.characterId === feedback.characterId)))} onChange={event => setXinchaoFeedbackSettings({ ...feedback, enabled: event.target.checked })} /></label>
+                <label className={styles.binding}>反馈绑定生活私聊<select aria-label="反馈绑定生活私聊" value={feedback.sessionId} onChange={event => { const selected = chatChoices.find(item => item.id === event.target.value); setXinchaoFeedbackSettings({ enabled: false, sessionId: selected?.id || '', characterId: selected?.characterId || '' }); }}><option value="">由你选择，不自动绑定</option>{feedback.sessionId && !chatChoices.some(item => item.id === feedback.sessionId) && <option value={feedback.sessionId}>原绑定对话不可用</option>}{chatChoices.map(item => <option key={item.id} value={item.id}>{item.label}</option>)}</select></label>
+                <div className={styles.sectionTitle}><button type="button" disabled={feedbackBusy} onClick={() => { setFeedbackBusy(true); void checkXinchaoFeedbackAvailable().then(available => { setFeedbackAvailable(available); setFeedbackNote(available ? '服务端已配置；选择绑定后可明确开启。' : '服务端尚未启用反馈，当前不会向心潮发送。'); }).catch(() => setFeedbackNote('检查未完成，请先验证本人会话。')).finally(() => setFeedbackBusy(false)); }}>检查对话反馈服务</button><button type="button" disabled={feedbackBusy} onClick={() => void checkLastXinchaoFeedback()}>核对上次反馈</button></div>
+                <p className={styles.note}>正常回复后发送去重的在场标识与固定“普通对话”反馈，不含原文，也不判断亲密或争执。心潮按自身规则处理普通互动，可能更新清醒、驱力与作息；不增加分类模型请求。20秒内最多一次，失败不阻断聊天、不自动重发。开关只控制本机及同源页面，不能撤回已发送信号。</p>
+                <p className={styles.note} role="status">{feedbackNote}</p>
+                <p className={styles.note}>工作区、AI私人空间、群聊和后台唤醒不自动接入；当前不自动判定互动类型或开启身体模拟。</p>
             </section>
+            <XinchaoProactivePanel choices={chatChoices} />
         </main>
     </PageShell>;
 }

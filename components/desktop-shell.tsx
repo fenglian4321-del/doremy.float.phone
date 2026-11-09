@@ -41,6 +41,8 @@ import { MascotFloat } from "@/components/mascot/mascot-float";
 import { PerceptionBootstrap } from "@/components/perception/perception-bootstrap";
 import { MascotPreviewHost } from "@/components/mascot/mascot-preview-host";
 import { useMusicControlsOptional } from "@/lib/music-context";
+import { WorkbenchApp } from "@/components/workbench/workbench-app";
+import { MemorySkyApp } from "@/components/memory/memory-sky-app";
 import { XinchaoApp } from "@/components/xinchao/xinchao-app";
 import { PhoneResourcesApp, type ResourceSubPage } from "@/components/phone-resources-app";
 import { CheckPhoneApp } from "@/components/checkphone/checkphone-app";
@@ -1932,6 +1934,7 @@ export function DesktopShell({ initialThemeProfile, initialThemeAssets }: Deskto
     let cancelled = false;
     let servicesStarted = false;
     let cleanupWeixinCloudRealtimeSync: (() => void) | null = null;
+    let cleanupXinchaoProactive: (() => void) | null = null;
     let cleanupLifeScheduleScheduler: (() => void) | null = null;
 
     void (async () => {
@@ -1977,6 +1980,7 @@ export function DesktopShell({ initialThemeProfile, initialThemeAssets }: Deskto
       cleanupWeixinCloudRealtimeSync = stopWeixinCloudRealtimeSync;
       // 离线推送回端合并：拉取服务端兜底生成的消息并落进聊天记录
       void import("@/lib/push-outbox-client").then(m => m.installServerOutboxConsumer()).catch(() => undefined);
+      void import("@/lib/xinchao-proactive-client").then(m => { if (!cancelled) { m.installXinchaoProactiveConsumer(); cleanupXinchaoProactive = m.stopXinchaoProactiveConsumer; } }).catch(() => undefined);
       // 现实桥离线联动：规则/快照同步器（规则变更、切后台时刷新服务端快照）
       void import("@/lib/push-bridge-sync").then(m => m.installBridgeServerSync()).catch(() => undefined);
       // 定时唤醒/经期关怀兜底：切后台时刷新快照预约
@@ -1986,6 +1990,7 @@ export function DesktopShell({ initialThemeProfile, initialThemeAssets }: Deskto
     return () => {
       cancelled = true;
       cleanupWeixinCloudRealtimeSync?.();
+      cleanupXinchaoProactive?.();
       if (servicesStarted) {
         stopFollowUpService();
         stopMomentsService();
@@ -4470,6 +4475,9 @@ html,body{margin:0;padding:0;width:100%;height:100%;background:#121110;color:rgb
     if (activeApp === "story") {
       return <StoryApp onClose={() => setActiveApp(null)} />;
     }
+
+    if (activeApp === "workspace") return <WorkbenchApp onClose={() => setActiveApp(null)} />;
+    if (activeApp === "memorysky") return <MemorySkyApp onClose={() => setActiveApp(null)} />;
 
     if (activeApp === "xinchao") {
       return <XinchaoApp onClose={() => setActiveApp(null)} />;

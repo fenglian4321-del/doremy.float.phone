@@ -1,0 +1,5 @@
+.app { min-height:100%; background:radial-gradient(ellipse at 12% 0,#31223e77,transparent 60%),#100d19; color:#e7dced; padding:14px 12px 30px; overflow:auto; }
+.header { display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:16px; padding-top:env(safe-area-inset-top,0px); }
+.header button { display:grid; place-items:center; width:36px; height:36px; border:1px solid #bd9dc633; border-radius:12px; background:#cba6df0d; color:#d6bce2; }
+.header span { display:flex; gap:7px; align-items:center; font-size:13px; letter-spacing:.1em; }
+.header small { font-size:8px; letter-spacing:.12em; color:#a98bb5; }

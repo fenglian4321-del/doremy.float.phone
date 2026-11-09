@@ -1,0 +1,22 @@
+[
+  {
+    "id": "example",
+    "name": "管理员审核的只读服务",
+    "url": "https://mcp.example.invalid/mcp",
+    "tokenEnv": "FLOAT_MCP_SERVICE_TOKEN_EXAMPLE",
+    "modes": ["work", "private"],
+    "tools": [
+      {
+        "name": "lookup",
+        "description": "查询明确选择的资料，不提交外部写入",
+        "readOnly": true,
+        "inputSchema": {
+          "type": "object",
+          "properties": {"query": {"type": "string", "maxLength": 256}},
+          "required": ["query"],
+          "additionalProperties": false
+        }
+      }
+    ]
+  }
+]

@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "memories": [
+    {"id": "fiction_music", "content": "虚构角色青禾喜欢在雨天听钢琴曲。"},
+    {"id": "fiction_allergy", "content": "虚构角色知夏对花生过敏。"}
+  ],
+  "queries": [
+    {"id": "cal_music", "split": "calibration", "text": "青禾下雨时爱听什么音乐？", "expectedIds": ["fiction_music"]},
+    {"id": "cal_food", "split": "calibration", "text": "给知夏准备食物要避开什么？", "expectedIds": ["fiction_allergy"]},
+    {"id": "cal_absent_1", "split": "calibration", "text": "火星的重力有多大？", "expectedIds": []},
+    {"id": "cal_absent_2", "split": "calibration", "text": "哪年发明了蒸汽机？", "expectedIds": []},
+    {"id": "val_music", "split": "validation", "text": "阴雨天青禾会选择哪类乐曲？", "expectedIds": ["fiction_music"]},
+    {"id": "val_food", "split": "validation", "text": "知夏吃坚果有什么禁忌？", "expectedIds": ["fiction_allergy"]},
+    {"id": "val_absent_1", "split": "validation", "text": "台风的形成条件是什么？", "expectedIds": []},
+    {"id": "val_absent_2", "split": "validation", "text": "怎样计算三角形的面积？", "expectedIds": []}
+  ]
+}

@@ -48,7 +48,7 @@ assert.equal(oldParts.find(p => p.functionResponse).functionResponse.id, undefin
 assert.equal(Object.keys(oldParts.find(p => p.functionCall).functionCall.args).length, 0);
 const http = load('../lib/llm-http.ts', { './usage-fetch': usage });
 const budget = load('../lib/consolidation-budget.ts', { './token-counter': load('../lib/token-counter.ts') });
-const client = load('../lib/workspace-client.ts', { './kv-db': db, './llm-provider-adapter': adapter, './consolidation-budget': budget, './llm-http': http, './phone-file-tools': { getPhoneToolSession: () => null, phoneToolRunPending: () => false, clearPhoneToolRun: noop, disablePhoneTools: noop } }, true);
+const client = load('../lib/workspace-client.ts', { './kv-db': db, './llm-provider-adapter': adapter, './consolidation-budget': budget, './llm-http': http, './phone-device-tools':{getPhoneDeviceSession:()=>null,phoneDeviceRunPending:()=>false,clearPhoneDeviceRun:()=>{},disablePhoneDeviceTools:()=>{}},'./managed-mcp-session': { getManagedMcpSession: () => null, managedMcpSessionPreparing: () => false, managedMcpRunPending: () => false, clearManagedMcpRun: noop, disableManagedMcpSession: noop }, './phone-file-tools': { getPhoneToolSession: () => null, phoneToolRunPending: () => false, clearPhoneToolRun: noop, disablePhoneTools: noop } }, true);
 // Exercise the actual entry wrapper: a remembered work mode renders no life subtree.
 const bankSource = ts.createSourceFile('bank.tsx', readFileSync(new URL('../components/memory/memory-bank-page.tsx', import.meta.url), 'utf8'), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
 const wrapper = bankSource.statements.find(node => ts.isFunctionDeclaration(node) && node.name?.text === 'MemoryBankPage').getText(bankSource);

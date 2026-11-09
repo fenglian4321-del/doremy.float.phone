@@ -24,7 +24,7 @@ class WorkspaceTests(unittest.IsolatedAsyncioTestCase):
         self.tmp.cleanup()
 
     async def call(self, operation, workspaceId="work-a", **args):
-        return await self.s.workspaces.dispatch(dict(operation=operation, **({} if operation in ("create", "list") else {"workspaceId": workspaceId}), **args))
+        return await self.s.workspaces.dispatch(dict(operation=operation, _externalClient="v1", **({} if operation in ("create", "list") else {"workspaceId": workspaceId}), **args))
 
     async def create(self, key="work-a"):
         return await self.call("create", title="合成工作项目", clientKey=key)

@@ -4,6 +4,9 @@ import { guardConsolidationBudget } from './consolidation-budget';
 import { fetchLlmPayload } from './llm-http';
 import type { ApiConfig } from './settings-types';
 import { getPhoneToolSession, phoneToolRunPending, clearPhoneToolRun, disablePhoneTools, type PhoneToolSession, type PhoneToolTrace } from './phone-file-tools';
+import { getManagedMcpSession, managedMcpSessionPreparing, managedMcpRunPending, clearManagedMcpRun, disableManagedMcpSession, type ManagedMcpSession, type ManagedMcpTrace } from './managed-mcp-session';
+import { getPhoneDeviceSession, phoneDeviceRunPending, clearPhoneDeviceRun, disablePhoneDeviceTools, type PhoneDeviceSession, type DeviceUiTrace } from './phone-device-tools';
+import type { WorkspaceAssistantSession, AssistantTrace } from './workspace-assistant-session';
 
 // No chat-storage, persona, memory, plugin, generic tool executor or Codex import.
 export type SpaceKind = 'work' | 'private';
@@ -19,7 +22,7 @@ export type AttachmentRef = { path: string; version: number; digest?: string };
 export type SpaceContextSummary = { version: number; text: string; throughCount: number; sourceDigest: string; source: 'model' | 'human'; updatedAt: number };
 export type Workspace = { id: string; mode: SpaceKind; title: string; version: number; archived: boolean; updatedAt: number; activeRun?: string | null; messages?: WorkspaceMessage[]; files?: { path: string; version: number; bytes: number; updatedAt: number }[]; context?: { enabled: boolean; summary: SpaceContextSummary | null } };
 export type WorkspaceTrace = { id: string; ok: boolean; path?: string; version?: number; code?: string; error?: string };
-export type WorkspaceRun = { id: string; kind?: 'chat' | 'compression'; state: 'running' | 'cancelled' | 'closed' | 'complete'; expires: number; messages: LlmRequestMessage[]; pending: LlmToolCall[]; turn: number; reply: string | null; model: string; apiFingerprint: string; trace: WorkspaceTrace[] };
+export type WorkspaceRun = { id: string; kind?: 'chat' | 'compression'; executionVersion?: 1; externalMode?: 'phone' | 'mcp' | 'assistant'; state: 'running' | 'cancelled' | 'closed' | 'complete'; expires: number; messages: LlmRequestMessage[]; pending: LlmToolCall[]; turn: number; reply: string | null; model: string; apiFingerprint: string; trace: WorkspaceTrace[] };
 export type SpaceFileHistory = { path: string; currentVersion: number; versions: { version: number; bytes: number; updatedAt: number; source: string; restoredFrom: number | null }[] };
 export type WorkspaceResult = { protocol: 'float-workspaces/v1' | 'float-private-spaces/v1'; workspace: Workspace; run?: WorkspaceRun; workspaces?: Workspace[]; fileHistory?: SpaceFileHistory; restored?: { path: string; version: number; fromVersion: number; replayed: boolean }; result?: { path: string; content: string; version: number; updatedAt: number; ok?: boolean; error?: string } };
 const parameters = (properties: Record<string, unknown>, required: string[]) => ({ type: 'object', properties, required, additionalProperties: false });
@@ -42,7 +45,7 @@ export async function spaceCall(kind: SpaceKind, operation: string, payload: Rec
     if (!Object.prototype.hasOwnProperty.call(PREFIXES, kind)) throw new Error('未识别空间范围，未发送请求。');
     const endpoint = kind === 'work' ? '/api/shared-memory/workspaces' : '/api/shared-memory/private-space';
     const expected = kind === 'work' ? 'float-workspaces/v1' : 'float-private-spaces/v1';
-    const response = await fetch(endpoint, { method: 'POST', credentials: 'same-origin', cache: 'no-store', headers: { 'Content-Type': 'application/json', 'x-float-space-context': 'v1' }, body: JSON.stringify({ operation, ...payload }), signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(25000)]) : AbortSignal.timeout(25000) });
+    const response = await fetch(endpoint, { method: 'POST', credentials: 'same-origin', cache: 'no-store', headers: { 'Content-Type': 'application/json', 'x-float-space-context': 'v1', 'x-float-space-external-tools': 'v1' }, body: JSON.stringify({ operation, ...payload }), signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(25000)]) : AbortSignal.timeout(25000) });
     const body = await response.json();
     if (!response.ok || body.ok !== true || body.protocol !== expected) {
         const message = body.error || '工作区服务版本不匹配，请先配套更新后端。';
@@ -56,7 +59,7 @@ export async function connectWorkspaceOwner(token: string) {
     const response = await fetch('/api/shared-memory', { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json', 'x-float-memory-access-token': token }, body: JSON.stringify({ action: 'connect' }) });
     const body = await response.json(); if (!response.ok || !body.ok) throw new Error(body.error || '本人会话验证失败。');
 }
-type Receipt = { claim: string; clientKey: string; runId?: string; model: string; pending?: boolean; configId: string; kind?: 'chat' | 'compression' };
+type Receipt = { claim: string; clientKey: string; runId?: string; model: string; pending?: boolean; configId: string; kind?: 'chat' | 'compression'; externalMode?: 'phone' | 'mcp' | 'assistant' };
 const key = (workspaceId: string, kind: SpaceKind = 'work') => PREFIXES[kind] + workspaceId;
 export function workspaceReceipt(workspaceId: string, kind: SpaceKind = 'work'): Receipt | null {
     try { return JSON.parse(kvGet(key(workspaceId, kind)) || 'null'); } catch { return null; }
@@ -76,16 +79,28 @@ export async function endWorkspaceRun(workspaceId: string, adopt = false, kind: 
 }
 
 const generating = new Set<string>();
-/** Canonical work-only messages and tools; never use the life chat assembler. */
-export async function runWorkspaceChat(workspace: Workspace, config: ApiConfig, content: string | null, signal: AbortSignal, update?: (state: WorkspaceResult, note?: string) => void, kind: SpaceKind = 'work', attachments: AttachmentRef[] = [], phoneTrace?: (trace: PhoneToolTrace) => void): Promise<WorkspaceResult> {
-    if (generating.has(kind + ":" + workspace.id)) throw new Error('同一工作区已有本机生成，未重复请求模型。');
-    const phone = content !== null ? getPhoneToolSession({ mode: kind, workspaceId: workspace.id }) : null;
-    if (phone && !nativeToolProtocolForConfig(config)) throw new Error('所选API关闭了原生工具；请停用AI手机目录或先在该API启用工具。');
-    generating.add(kind + ":" + workspace.id);
-    try { return await runWorkspaceChatCore(workspace, config, content, phone ? AbortSignal.any([signal, phone.signal]) : signal, update, kind, attachments, phone, phoneTrace); }
-    finally { generating.delete(kind + ":" + workspace.id); if (phone) disablePhoneTools(phone.scope); }
+const assistants = new Map<string, WorkspaceAssistantSession>();
+export function registerWorkspaceAssistant(session: WorkspaceAssistantSession) { const key = session.scope.mode + ':' + session.scope.workspaceId; assistants.get(key)?.stop(); assistants.set(key, session); }
+export function stopWorkspaceAssistant(kind: SpaceKind, id: string) { const key = kind + ':' + id; const session = assistants.get(key); assistants.delete(key); session?.stop(); }
+function assertExecution(current: WorkspaceResult, expected: 'vps' | 'phone' | 'mcp' | 'assistant') {
+    if (current.run?.executionVersion !== 1 || (current.run.externalMode || 'vps') !== expected) throw new Error('服务端未确认本任务的固定执行位置；未请求模型或重放工具。请核对回执后结束旧任务。');
 }
-async function runWorkspaceChatCore(workspace: Workspace, config: ApiConfig, content: string | null, signal: AbortSignal, update?: (state: WorkspaceResult, note?: string) => void, kind: SpaceKind = 'work', attachments: AttachmentRef[] = [], phone?: PhoneToolSession | null, phoneTrace?: (trace: PhoneToolTrace) => void): Promise<WorkspaceResult> {
+/** Canonical work-only messages and tools; never use the life chat assembler. */
+export async function runWorkspaceChat(workspace: Workspace, config: ApiConfig, content: string | null, signal: AbortSignal, update?: (state: WorkspaceResult, note?: string) => void, kind: SpaceKind = 'work', attachments: AttachmentRef[] = [], phoneTrace?: (trace: PhoneToolTrace) => void, mcpTrace?: (trace: ManagedMcpTrace) => void, deviceTrace?: (trace: DeviceUiTrace) => void, assistantTrace?: (trace: AssistantTrace) => void): Promise<WorkspaceResult> {
+    if (generating.has(kind + ":" + workspace.id)) throw new Error('同一工作区已有本机生成，未重复请求模型。');
+    if (content !== null && managedMcpSessionPreparing({ mode: kind, workspaceId: workspace.id })) throw new Error('正在核对本轮MCP授权，请稍后再发；未回退其他执行位置。');
+    const phone = content !== null ? getPhoneToolSession({ mode: kind, workspaceId: workspace.id }) : null;
+    const managed = content !== null ? getManagedMcpSession({ mode: kind, workspaceId: workspace.id }) : null;
+    const device = content !== null ? getPhoneDeviceSession({ mode: kind, workspaceId: workspace.id }) : null;
+    const assistant = content !== null ? assistants.get(kind + ':' + workspace.id) : null;
+    if (!assistant && [phone, managed, device].filter(Boolean).length > 1) throw new Error('请明确选择本轮手机目录、设备界面或外部MCP中的一个授权范围，未请求模型。');
+    const external = assistant || phone || device || managed;
+    if (external && !nativeToolProtocolForConfig(config)) throw new Error('所选API关闭了原生工具；请停用本轮外部工具或先在该API启用工具。');
+    generating.add(kind + ":" + workspace.id);
+    try { if (content !== null) { if (assistant) await assistant.bindTask(content); else if (device) await device.bindTask(content); } return await runWorkspaceChatCore(workspace, config, content, external ? AbortSignal.any([signal, external.signal]) : signal, update, kind, attachments, external, value => { if ('assistant' in value) assistantTrace?.(value); else if ('deviceUi' in value) deviceTrace?.(value); else if ('operation' in value) phoneTrace?.(value); else mcpTrace?.(value); }, assistant ? 'assistant' : phone || device ? 'phone' : managed ? 'mcp' : undefined); }
+    finally { stopWorkspaceAssistant(kind, workspace.id); generating.delete(kind + ":" + workspace.id); if (phone) disablePhoneTools(phone.scope); if (device) disablePhoneDeviceTools(device.scope); if (managed) disableManagedMcpSession(managed.scope); }
+}
+async function runWorkspaceChatCore(workspace: Workspace, config: ApiConfig, content: string | null, signal: AbortSignal, update?: (state: WorkspaceResult, note?: string) => void, kind: SpaceKind = 'work', attachments: AttachmentRef[] = [], phone?: PhoneToolSession | ManagedMcpSession | PhoneDeviceSession | WorkspaceAssistantSession | null, phoneTrace?: (trace: PhoneToolTrace | ManagedMcpTrace | DeviceUiTrace | AssistantTrace) => void, externalMode?: 'phone' | 'mcp' | 'assistant'): Promise<WorkspaceResult> {
     if (workspace.mode !== kind) throw new Error('空间作用域不匹配，未请求模型。');
     const tools = phone ? phone.tools() : kind === 'work' ? WORKSPACE_TOOLS : PRIVATE_SPACE_TOOLS;
     const call = (operation: string, payload: Record<string, unknown> = {}, requestSignal?: AbortSignal) => spaceCall(kind, operation, payload, requestSignal);
@@ -97,9 +112,9 @@ async function runWorkspaceChatCore(workspace: Workspace, config: ApiConfig, con
         if (workspace.activeRun) throw new Error('请先恢复或结束当前任务，未替换其恢复标识。');
         if (!content.trim()) throw new Error('请填写工作消息。');
         if (receipt?.pending && !receipt.runId) throw new Error('上次发送回执待核对，请使用恢复，不会新建重复消息。');
-        receipt = { claim: crypto.randomUUID(), clientKey: crypto.randomUUID(), model: config.defaultModel, configId: config.id, pending: true, kind: 'chat' };
+        receipt = { claim: crypto.randomUUID(), clientKey: crypto.randomUUID(), model: config.defaultModel, configId: config.id, pending: true, kind: 'chat', ...(externalMode ? { externalMode } : {}) };
         kvSet(key(workspaceId, kind), JSON.stringify(receipt));
-        try { current = await call('begin', { workspaceId, clientKey: receipt.clientKey, claim: receipt.claim, content, version: workspace.version, model: config.defaultModel, apiFingerprint, ...(attachments.length ? { attachments: attachments.map(({ path, version }) => ({ path, version })) } : {}) }, signal); }
+        try { current = await call('begin', { workspaceId, clientKey: receipt.clientKey, claim: receipt.claim, content, version: workspace.version, model: config.defaultModel, apiFingerprint, ...(externalMode ? { externalMode } : {}), ...(attachments.length ? { attachments: attachments.map(({ path, version }) => ({ path, version })) } : {}) }, signal); }
         catch (error) { if (error instanceof WorkspaceError && [400, 403, 404, 409, 413].includes(error.status)) kvRemove(key(workspaceId, kind)); throw error; }
     } else {
         current = receipt?.pending && !receipt.runId
@@ -108,9 +123,17 @@ async function runWorkspaceChatCore(workspace: Workspace, config: ApiConfig, con
         if (!current.run) { kvRemove(key(workspaceId, kind)); update?.(current, '没有未完成任务；若上次消息未被服务端接受，可以重新发送。未调用模型。'); return current; }
         if (current.run.kind === 'compression') throw new Error('当前是摘要任务，请使用恢复摘要；未请求普通聊天模型。');
         if (!current.workspace.activeRun && current.run.state !== 'complete') { update?.(current, '任务已结束，工作消息与已完成文件保留；未请求模型。'); return current; }
+        if (current.run.state !== 'complete' && current.run.executionVersion !== 1) throw new Error('旧任务缺少固定执行位置，不能自动重放；请核对回执后明确结束原任务。');
+        if (current.run.externalMode && current.run.state !== 'complete') {
+            if (receipt?.pending && !receipt.runId) {
+                receipt.runId = current.run.id; delete receipt.pending; receipt.externalMode = current.run.externalMode; kvSet(key(workspaceId, kind), JSON.stringify(receipt));
+                await call('cancel', { workspaceId, runId: current.run.id, claim: receipt.claim }).catch(() => undefined);
+            }
+            throw new Error('上次手机/外部工具上下文不能自动重放；请核对回执、结束原任务后明确新消息。');
+        }
         if (current.run.state !== 'complete' && current.run.apiFingerprint !== apiFingerprint) throw new Error('恢复需使用原任务同一API配置、地址和模型；也可结束任务后再选新模型。');
         if (current.run.state !== 'complete' && (!(receipt?.pending && !receipt.runId) || current.run.state !== 'running' || current.run.expires <= Date.now() / 1000)) {
-            receipt = { claim: crypto.randomUUID(), clientKey: '', runId: current.run!.id, model: current.run!.model, configId: config.id };
+            receipt = { claim: crypto.randomUUID(), clientKey: '', runId: current.run!.id, model: current.run!.model, configId: config.id, ...(receipt?.externalMode ? { externalMode: receipt.externalMode } : {}) };
             current = await call('adopt', { workspaceId, runId: current.run!.id, claim: receipt.claim }, signal);
         }
     }
@@ -120,13 +143,15 @@ async function runWorkspaceChatCore(workspace: Workspace, config: ApiConfig, con
     kvSet(key(workspaceId, kind), JSON.stringify(auth));
     update?.(current);
     const phoneScope = { mode: kind, workspaceId };
-    if (current.run.state === 'complete') { clearPhoneToolRun(phoneScope, current.run.id); return current; }
+    if (current.run.state === 'complete') { clearPhoneToolRun(phoneScope, current.run.id); clearPhoneDeviceRun(phoneScope, current.run.id); clearManagedMcpRun(phoneScope, current.run.id); return current; }
     const identity = { workspaceId, runId: current.run.id, claim: auth.claim };
     const heartbeat = setInterval(() => { void call('heartbeat', identity).catch(() => undefined); }, 30000);
+    const pulse = async () => { const state = await call('heartbeat', identity, signal); assertExecution(state, externalMode || 'vps'); };
     let finished = false;
     try {
-        if (content === null && phoneToolRunPending(phoneScope, current.run.id)) throw new Error('上次手机工具上下文仅留在原页面，不能自动重放。请先核对手机回执及文件，结束原任务后明确发送新消息。');
-        if (phone) { await phone.check(signal); phone.begin(current.run.id); }
+        assertExecution(current, externalMode || 'vps');
+        if (content === null && (auth.externalMode || phoneToolRunPending(phoneScope, current.run.id) || phoneDeviceRunPending(phoneScope, current.run.id) || managedMcpRunPending(phoneScope, current.run.id))) throw new Error('上次手机/外部工具上下文仅留在原页面，不能自动重放。请先核对对应回执，结束原任务后明确发送新消息。');
+        if (phone) { if ('bindRun' in phone) phone.bindRun({ runId: current.run.id, claim: auth.claim }); await phone.check(signal); phone.begin(current.run.id); }
         const phoneMessages: LlmRequestMessage[] = [...current.run.messages];
         let phoneTurns = 0;
         while (true) {
@@ -138,6 +163,7 @@ async function runWorkspaceChatCore(workspace: Workspace, config: ApiConfig, con
                 continue;
             }
             const native = Boolean(nativeToolProtocolForConfig(config));
+            await pulse();
             if (phone) await phone.check(signal);
             const turns = phone ? phoneTurns : run.turn;
             const messages = phone ? [phone.prompt(), ...phoneMessages] : native ? [...run.messages] : [{ role: 'system' as const, content: '当前API关闭了原生工具，仅可文字回复，不会执行文件动作。' }, ...run.messages];
@@ -149,6 +175,7 @@ async function runWorkspaceChatCore(workspace: Workspace, config: ApiConfig, con
             if (!response.ok) { await response.body?.cancel(); throw new Error(`工作模型请求失败（HTTP ${response.status}）；记录与已完成文件操作保留。`); }
             const parsed = parseProviderResponse(request.providerKind, await response.json());
             signal.throwIfAborted();
+            await pulse();
             if (phone) await phone.check(signal);
             if (parsed.toolCalls.length) {
                 if (turns >= 8) throw new Error('本次已达到8轮工作工具上限；未执行新增动作，工作记录保留。');
@@ -156,9 +183,9 @@ async function runWorkspaceChatCore(workspace: Workspace, config: ApiConfig, con
                 if (phone) {
                     phone.validateBatch(parsed.toolCalls);
                     phoneMessages.push({ role: 'assistant', content: parsed.content || '', toolCalls: parsed.toolCalls, ...(parsed.reasoning ? { reasoning: parsed.reasoning } : {}), ...(parsed.openRouterReasoningDetails ? { openRouterReasoningDetails: parsed.openRouterReasoningDetails } : {}) });
-                    for (const tool of parsed.toolCalls) phoneMessages.push(await phone.execute(tool, signal, phoneTrace));
+                    for (const tool of parsed.toolCalls) { await pulse(); phoneMessages.push(await phone.execute(tool, signal, phoneTrace)); }
                     phoneTurns++;
-                    update?.(current, '此手机工具已返回本轮所选模型；工具原文未保存为VPS文件、生活记忆或操作日志。');
+                    update?.(current, '工具已返回本轮所选模型；原文未独立保存为VPS文件、生活记忆或操作日志。');
                     continue;
                 }
                 current = await call('turn', { ...identity, turnKey: crypto.randomUUID(), assistant: { role: 'assistant', content: parsed.content || '', toolCalls: parsed.toolCalls, ...(parsed.reasoning ? { reasoning: parsed.reasoning } : {}), ...(parsed.openRouterReasoningDetails ? { openRouterReasoningDetails: parsed.openRouterReasoningDetails } : {}) } }, signal);
@@ -166,7 +193,7 @@ async function runWorkspaceChatCore(workspace: Workspace, config: ApiConfig, con
             }
             if (!parsed.content.trim()) throw new Error('模型没有返回有效工作回复；未补调总结或规划模型。');
             current = await call('finish', { ...identity, content: parsed.content }, signal);
-            if (phone) clearPhoneToolRun(phoneScope, current.run!.id);
+            if (phone) { clearPhoneToolRun(phoneScope, current.run!.id); clearPhoneDeviceRun(phoneScope, current.run!.id); clearManagedMcpRun(phoneScope, current.run!.id); }
             finished = true; update?.(current); return current;
         }
     } finally {
@@ -199,6 +226,7 @@ export async function compressWorkspaceContext(workspace: Workspace, config: Api
             current = receipt?.pending && !receipt.runId ? await call('lookup', { workspaceId, clientKey: receipt.clientKey, claim: receipt.claim }, signal) : await call('detail', { workspaceId }, signal);
             if (!current.run) { kvRemove(key(workspaceId, kind)); update?.(current, '没有待恢复摘要，未请求模型。'); return current; }
             if (current.run.kind !== 'compression') throw new Error('当前是普通聊天任务，请使用恢复聊天。');
+            if (current.run.state !== 'complete' && current.run.executionVersion !== 1) throw new Error('旧摘要任务缺少固定执行位置，请明确结束后重新发起摘要；未请求模型。');
             if (current.run.state !== 'complete' && !current.workspace.activeRun) { update?.(current, '摘要任务已结束，旧摘要保留；未请求模型。'); return current; }
             if (current.run.state !== 'complete' && current.run.apiFingerprint !== fingerprint) throw new Error('恢复摘要需要原API配置、地址和模型；未换模型重做。');
             if (current.run.state !== 'complete' && (!(receipt?.pending && !receipt.runId) || current.run.state !== 'running' || current.run.expires <= Date.now() / 1000)) {
@@ -210,6 +238,7 @@ export async function compressWorkspaceContext(workspace: Workspace, config: Api
         receipt.runId = current.run.id; delete receipt.pending; kvSet(key(workspaceId, kind), JSON.stringify(receipt));
         update?.(current);
         if (current.run.state === 'complete') return current;
+        assertExecution(current, 'vps');
         identity = { workspaceId, runId: current.run.id, claim: receipt.claim };
         heartbeat = setInterval(() => { void call('heartbeat', identity).catch(() => undefined); }, 30000);
         const request = buildProviderRequest(config, null, current.run.messages, { maxTokens: 2048 });

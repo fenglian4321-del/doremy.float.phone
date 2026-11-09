@@ -84,20 +84,22 @@ async function resolveDiaryEntryGeneration(
 export async function generateDiaryEntryForCharacter(
   characterId: string,
   entries: DiaryEntry[],
-  _trigger: DiaryEntryTrigger = "manual",
+  trigger: DiaryEntryTrigger = "manual",
+  options?: { signal?: AbortSignal },
 ): Promise<ParsedDiaryEntry> {
   // Tracked at the engine so every caller (manual + background timer) shows up
   // in the diary app's "generating" indicator, even across app re-entry.
   beginDiaryGeneration(characterId);
   try {
     const resolved = await resolveDiaryEntryGeneration(characterId, entries);
+    options?.signal?.throwIfAborted();
     const raw = await sendLLMRequest(
       resolved.apiConfig,
       resolved.preset,
       resolved.messages,
       resolved.regexes,
       { characterName: `日记:${resolved.character.name}`, userName: resolved.userName },
-      { appId: "diary", appTags: ["diary", "entries"] },
+      { appId: "diary", appTags: ["diary", "entries"], debugSessionId: 'diary:' + characterId, usageReason: trigger === 'timer' ? 'diary_timer' : 'manual_diary', usageSource: trigger === 'timer' ? 'background' : 'chat', signal: options?.signal },
     );
     return parseDiaryEntryContent(raw);
   } finally {

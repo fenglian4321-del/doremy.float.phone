@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { NextResponse } from 'next/server';
 import { authorizeSharedMemory, readSharedMemoryConfig, sharedMemoryRequestOrigin, SharedMemoryError } from '@/lib/server/shared-memory';
 import { createOmbreReviewClient } from '@/lib/server/shared-memory-review';
@@ -24,7 +25,23 @@ export async function POST(request: Request) {
         let body: unknown;
         try { body = JSON.parse(raw); } catch { throw new SharedMemoryError('invalid_request', '工作区 JSON 无效。', 400); }
         if (!body || typeof body !== 'object' || Array.isArray(body)) throw new SharedMemoryError('invalid_request', '工作区请求格式无效。', 400);
-        const result = await createOmbreReviewClient(config).workspaces(body as Record<string, unknown>);
+        const payload = { ...body as Record<string, unknown> }; delete payload._externalClient;
+        if (request.headers.get('x-float-space-external-tools') === 'v1') payload._externalClient = 'v1';
+        if (payload.operation === 'phone_lease') {
+            if (payload._externalClient !== 'v1' || Object.keys(payload).sort().join(',') !== '_externalClient,claim,operation,runId,workspaceId'
+                || !['workspaceId', 'runId'].every(key => typeof payload[key] === 'string' && /^[A-Za-z0-9_-]{1,100}$/.test(payload[key] as string))
+                || typeof payload.claim !== 'string' || !/^[^\x00-\x20\x7f]{1,160}$/.test(payload.claim)) throw new SharedMemoryError('invalid_request', '手机任务租约标识无效。', 400);
+            const state = await createOmbreReviewClient(config).workspaces({ ...payload, operation: 'heartbeat' });
+            const run = state.run as { id?: string; state?: string; executionVersion?: number; externalMode?: string } | undefined;
+            const space = state.workspace as { id?: string; mode?: string } | undefined;
+            if (!run || run.id !== payload.runId || run.state !== 'running' || run.executionVersion !== 1 || !['phone', 'assistant'].includes(run.externalMode || '') || space?.id !== payload.workspaceId || space?.mode !== 'work') throw new SharedMemoryError('work_inactive', '原手机任务已停止、失效或执行位置不符。', 409);
+            const messages = (state.workspace as { messages?: { id?: string; role?: string; content?: string }[] }).messages;
+            const task = Array.isArray(messages) ? messages.find(message => message.id === 'u_' + run.id && message.role === 'user') : undefined;
+            if (typeof task?.content !== 'string') throw new SharedMemoryError('work_inactive', '原手机任务文字不可核对。', 409);
+            const taskDigest = createHash('sha256').update(task.content, 'utf8').digest('hex');
+            return NextResponse.json({ ok: true, protocol: 'float-shell-ui-lease/v1', taskDigest, runId: run.id, scope: { mode: 'work', workspaceId: payload.workspaceId }, executionVersion: 1, externalMode: run.externalMode, state: 'running' }, { headers });
+        }
+        const result = await createOmbreReviewClient(config).workspaces(payload);
         if (result.run && typeof result.run === 'object' && 'kind' in result.run && result.run.kind === 'compression' && request.headers.get('x-float-space-context') !== 'v1') throw new SharedMemoryError('work_client_upgrade', '当前记录包含摘要任务，请刷新页面更新客户端后恢复，未请求模型。', 409);
         return NextResponse.json(result, { headers });
     } catch (error) {

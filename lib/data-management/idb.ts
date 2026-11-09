@@ -21,6 +21,7 @@ import {
   type MediaResolver,
 } from "./serializers";
 import { kvEntries, kvGet, kvRemove, kvSetAsync } from "../kv-db";
+import { isDeviceLocalExecutionKey } from "./device-local-state";
 
 type SourceStats = {
   records: number;
@@ -337,6 +338,7 @@ async function exportIndexedDbSource(
       for (let index = 0; index < rawRecords.length; index += 1) {
         const record = rawRecords[index];
         rawRecords[index] = undefined as unknown as StoreRecordBackup;
+        if (source.dbName === "AiPhoneKvDB" && (isDeviceLocalExecutionKey(record.key) || isDeviceLocalExecutionKey(record.value && typeof record.value === 'object' && 'key' in record.value ? record.value.key : undefined))) continue;
         const filtered = filterOldDynamicImages(source.dbName, storeName, record.value, imageCutoffMs);
         if (filtered.skip) continue;
         records.push({
@@ -401,7 +403,7 @@ async function readKvRecords(source: KvSource): Promise<{ key: string; value: st
 }
 
 async function exportKvSource(source: KvSource, collector?: MediaCollector): Promise<KvSourceBackup> {
-  const records = await readKvRecords(source);
+  const records = (await readKvRecords(source)).filter(record => !isDeviceLocalExecutionKey(record.key));
   if (!collector) return { type: "kv", records };
   for (let index = 0; index < records.length; index += 1) {
     records[index] = { ...records[index], value: await serializeStorageString(records[index].value, collector) };
@@ -414,7 +416,7 @@ async function exportLocalStorageSource(source: LocalStorageSource, collector?: 
   const records: { key: string; value: string }[] = [];
   for (let index = 0; index < window.localStorage.length; index += 1) {
     const key = window.localStorage.key(index);
-    if (!key || !matchesKey(key, source)) continue;
+    if (!key || !matchesKey(key, source) || isDeviceLocalExecutionKey(key)) continue;
     const value = window.localStorage.getItem(key);
     if (value !== null) records.push({ key, value: await serializeStorageString(value, collector) });
   }
@@ -603,6 +605,7 @@ export async function importSource(
     for (const record of payload.records) {
       // 单条失败（配额满、单条数据损坏）只损失这一条，剩下的照常导入。
       try {
+        if (isDeviceLocalExecutionKey(record.key)) { result.skipped += 1; continue; }
         const exists = window.localStorage.getItem(record.key) !== null;
         if (exists && !overwrite) {
           result.skipped += 1;
@@ -626,6 +629,7 @@ export async function importSource(
       // 逐条兜底：以前整个循环包在一个 try 里，第一条出错后剩余记录全部
       // 静默丢弃——正是「恢复内容不全」的来源之一。
       try {
+        if (isDeviceLocalExecutionKey(record.key)) { result.skipped += 1; continue; }
         const incoming = await deserializeStorageString(record.value, resolver);
         const existing = kvGet(record.key);
         const exists = existing !== null;
@@ -681,6 +685,7 @@ export async function importSource(
           const record = storePayload.records[recordIndex];
           const key = await deserializeValue(record.key);
           const value = await deserializeValue(record.value, resolver);
+          if (payload.dbName === "AiPhoneKvDB" && (isDeviceLocalExecutionKey(key) || isDeviceLocalExecutionKey(value && typeof value === 'object' && 'key' in value ? value.key : undefined))) { result.skipped += 1; continue; }
           const hasKey = key !== undefined && key !== null;
           const transaction = db.transaction(storePayload.name, "readwrite");
           done = transactionDone(transaction);
