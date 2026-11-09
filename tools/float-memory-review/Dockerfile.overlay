@@ -1,0 +1,7 @@
+# Build the reviewed Ombre base image locally first; no credentials in this image.
+ARG OMBRE_BASE_IMAGE
+FROM ${OMBRE_BASE_IMAGE}
+COPY review_service.py install_overlay.py float_orbis_import.py float_latent_semantic.py float_provider_state.py float_consolidation.py float_workspaces.py float_private_spaces.py check_overlay_package.py /opt/float-memory/
+COPY float_latent_vendor /opt/float-memory/float_latent_vendor
+RUN python /opt/float-memory/check_overlay_package.py --staged /opt/float-memory && python /opt/float-memory/install_overlay.py --src /app/src --apply
+ENTRYPOINT ["python", "/opt/float-memory/float_provider_state.py"]

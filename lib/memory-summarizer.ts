@@ -6,7 +6,7 @@ import type { MemoryEntry } from "./memory-types";
 import { DEFAULT_SUMMARIZATION_PROMPT } from "./memory-types";
 import {
     loadMemoryConfig,
-    loadMemoryEntries,
+    loadMemoryEntriesByType,
     saveMemoryEntry,
     deleteMemoryEntries,
     getEventCounter,
@@ -15,6 +15,7 @@ import {
     getLastSummarizedTimestamp,
     getLastCoreSummarizedTimestamp,
     setLastSummarizedTimestamp,
+    setLastCoreSummarizedTimestamp,
     incrementCoreMemoryCounter,
 } from "./memory-storage";
 import { resolveAuxiliaryApiConfig } from "./settings-storage";
@@ -37,7 +38,7 @@ export async function maybeRunSummarization(
     memoryWrites?: { writeLongTermMemory?: boolean; writeCoreMemory?: boolean },
 ): Promise<void> {
     const config = loadMemoryConfig();
-    if (!config.autoSummarizeEnabled) return;
+    if (config.memorySource === "shared" || !config.autoSummarizeEnabled || config.automaticWritesPaused) return;
 
     const counter = getEventCounter(characterId);
     if (counter < config.summarizationEventInterval) return;
@@ -73,8 +74,11 @@ export async function runSummarizationPipeline(
         writeLongTermMemory?: boolean;
         writeCoreMemory?: boolean;
     }
-): Promise<{ success: boolean; error?: string }> {
+): Promise<{ success: boolean; error?: string; pending?: boolean }> {
     const config = loadMemoryConfig();
+    let pending = false;
+    if (config.memorySource === "shared") return { success: false, error: "共享模式已改为按具体对话的阈值整理；使用当前聊天模型，不再调用辅助总结 API。请在共享整理面板操作。" };
+    if (config.automaticWritesPaused) return { success: false, error: "程序写入记忆已暂停" };
 
     // Resolve API from auxiliary binding
     const apiConfig = resolveAuxiliaryApiConfig("memorySummaryApiConfigId");
@@ -162,15 +166,18 @@ export async function runSummarizationPipeline(
 
     // 保存目标分别受分线开关控制；关闭写入不会删除已有记忆。
     const now = new Date().toISOString();
-    if (options?.writeLongTermMemory !== false) {
+    if (loadMemoryConfig().memorySource === "shared") return { success: false, error: "来源已切换到共享库，旧总结未入库。" };
+    const sharedMode = false;
+    const sharedCoreOnly = sharedMode && options?.writeLongTermMemory === false && options?.writeCoreMemory !== false;
+    if (options?.writeLongTermMemory !== false || sharedCoreOnly) {
         const longTermEntry: MemoryEntry = {
             id: `mem_lt_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
             characterId,
             sourceApp: dominantSource as MemoryEntry["sourceApp"],
-            type: "long_term",
+            type: sharedCoreOnly ? "core" : "long_term",
             content: summary,
             embedding,
-            importance: 0.8,
+            importance: sharedCoreOnly ? 0.95 : 0.8,
             createdAt: now,
             updatedAt: now,
             metadata: {
@@ -179,10 +186,16 @@ export async function runSummarizationPipeline(
                 sourceSessionIds,
             },
         };
-        await saveMemoryEntry(longTermEntry);
-        setLastSummarizedTimestamp(characterId, latest);
+        try {
+            const saved = await saveMemoryEntry(longTermEntry);
+            pending = saved.state === "pending";
+        } catch (error) {
+            return { success: false, error: error instanceof Error ? error.message : String(error) };
+        }
+        if (sharedCoreOnly) setLastCoreSummarizedTimestamp(characterId, latest);
+        else setLastSummarizedTimestamp(characterId, latest);
 
-        const allLongTerm = await loadMemoryEntries(characterId);
+        const allLongTerm = sharedMode || loadMemoryConfig().memorySource === "shared" ? [] : await loadMemoryEntriesByType(characterId, "long_term");
         if (allLongTerm.length > config.maxLongTermEntries) {
             const excess = allLongTerm.slice(0, allLongTerm.length - config.maxLongTermEntries);
             await deleteMemoryEntries(excess.map(e => e.id));
@@ -190,7 +203,7 @@ export async function runSummarizationPipeline(
     }
 
     resetEventCounter(characterId);
-    if (options?.writeCoreMemory !== false) {
+    if (options?.writeCoreMemory !== false && !sharedMode && loadMemoryConfig().memorySource !== "shared") {
         incrementCoreMemoryCounter(characterId);
         if (options?.writeLongTermMemory === false) {
             await runCoreMemoryPipeline(characterId, characterName, {
@@ -208,5 +221,5 @@ export async function runSummarizationPipeline(
     }
 
     console.log(`[MemorySummarizer] Summarized ${allEntries.length} entries`);
-    return { success: true };
+    return { success: true, pending };
 }

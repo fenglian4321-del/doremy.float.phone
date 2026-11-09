@@ -5,9 +5,12 @@
 //    绕过 opencode.ai 未开放浏览器 CORS 的问题。
 
 import type { LlmRequestPayload } from "./llm-provider-adapter";
+import { fetchWithUsage } from "./usage-fetch";
+import type { UsageContext } from "./usage-ledger";
 
 export type FetchLlmPayloadOptions = {
     signal?: AbortSignal;
+    usageContext?: UsageContext;
 };
 
 export function fetchLlmPayload(
@@ -16,7 +19,7 @@ export function fetchLlmPayload(
 ): Promise<Response> {
     const bodyText = JSON.stringify(payload.body);
     if (payload.serverProxy) {
-        return fetch("/api/llm-proxy", {
+        return fetchWithUsage("/api/llm-proxy", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
@@ -25,12 +28,12 @@ export function fetchLlmPayload(
                 body: bodyText,
             }),
             signal: options.signal,
-        });
+        }, options.usageContext ?? { provider: payload.providerKind, model: "unknown", source: "chat" }, fetch, payload.body.stream === true);
     }
-    return fetch(payload.url, {
+    return fetchWithUsage(payload.url, {
         method: "POST",
         headers: payload.headers,
         body: bodyText,
         signal: options.signal,
-    });
+    }, options.usageContext ?? { provider: payload.providerKind, model: "unknown", source: "chat" }, fetch, payload.body.stream === true);
 }

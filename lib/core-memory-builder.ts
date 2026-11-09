@@ -39,8 +39,10 @@ export async function runCoreMemoryPipeline(
     characterId: string,
     characterName: string,
     options?: { force?: boolean; additionalSummary?: { content: string; createdAt: string; sourceApp: MemoryEntry["sourceApp"]; sourceSessionIds: string[] } },
-): Promise<{ success: boolean; error?: string; rebuiltCount?: number }> {
+): Promise<{ success: boolean; error?: string; rebuiltCount?: number; pending?: boolean }> {
     const config = loadMemoryConfig();
+    if (config.automaticWritesPaused) return { success: false, error: "程序写入记忆已暂停" };
+    if (config.memorySource === "shared") return { success: false, error: "共享模式直接使用 Ombre 的正式记录，不再另生成 Float 核心副本；可在记忆库直接查看和纠错。" };
     const storedLongTermEntries = await loadMemoryEntriesByType(characterId, "long_term");
     const storySessionsById = new Map(loadStorySessions().map((session) => [session.id, session]));
     // 长期记忆可能汇总多个来源；若一条摘要包含明确禁止写入核心记忆的分线，
@@ -59,6 +61,7 @@ export async function runCoreMemoryPipeline(
         return { success: false, error: "没有可用于总结核心记忆的长期记忆" };
     }
 
+    if (loadMemoryConfig().memorySource === "shared") return { success: false, error: "记忆来源已切换到共享库，已停止本机核心副本生成。" };
     const apiConfig = resolveAuxiliaryApiConfig("memorySummaryApiConfigId");
     if (!apiConfig) {
         return { success: false, error: "未配置记忆总结 API（请在绑定配置 → 辅助API绑定中设置）" };
@@ -152,14 +155,21 @@ export async function runCoreMemoryPipeline(
             sourceSessionIds,
         },
     };
-    await saveMemoryEntry(coreEntry);
+    let pending = false;
+    try {
+        if (loadMemoryConfig().memorySource === "shared") return { success: false, error: "记忆来源已切换到共享库，未写入本机核心副本。" };
+        const saved = await saveMemoryEntry(coreEntry);
+        pending = saved.state === "pending";
+    } catch (error) {
+        return { success: false, error: error instanceof Error ? error.message : String(error) };
+    }
 
     setLastCoreSummarizedTimestamp(characterId, latest);
     if (!options?.force) {
         resetCoreMemoryCounter(characterId);
     }
 
-    return { success: true, rebuiltCount: 1 };
+    return { success: true, rebuiltCount: pending ? 0 : 1, pending };
 }
 
 export async function maybeRunCoreMemoryPipeline(
@@ -167,7 +177,7 @@ export async function maybeRunCoreMemoryPipeline(
     characterName: string,
 ): Promise<void> {
     const config = loadMemoryConfig();
-    if (!config.autoBuildCoreEnabled) return;
+    if (!config.autoBuildCoreEnabled || config.automaticWritesPaused || config.memorySource === "shared") return;
 
     const counter = getCoreMemoryCounter(characterId);
     if (counter < config.coreSummarizationInterval) return;

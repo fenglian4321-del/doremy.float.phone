@@ -31,6 +31,14 @@ import { resolveAuxiliaryApiConfig, resolveUserIdentity } from "@/lib/settings-s
 import { generateEmbedding, resolveEmbeddingModel } from "@/lib/memory-embedding";
 import { BINDING_ACCENTS } from "@/lib/ui-accent-colors";
 import { memorySourceLabel } from "@/lib/memory-injector";
+import { SharedMemoryPanel } from "./shared-memory-panel";
+import sharedMemoryStyles from "./shared-memory.module.css";
+import { UsageLedgerPanel } from "./usage-ledger-panel";
+import { CodexGatewayPanel } from "./codex-gateway-panel";
+import { SharedConsolidationPanel } from "./shared-consolidation-panel";
+import { WorkspacePanel } from "./workspace-panel";
+import { spaceUiMode, setSpaceUiMode, type SpaceKind } from "@/lib/workspace-client";
+import workspaceStyles from "./workspace.module.css";
 
 type MemoryView = "list" | "detail" | "settings";
 type MemoryTab = "short" | "shared" | "core" | "long";
@@ -104,6 +112,7 @@ type MemoryEditorState = {
     type: MemoryEntry["type"];
     entry?: MemoryEntry;
     content: string;
+    clientId?: string;
 };
 
 const memorySettingsIconStyle = (color: string): CSSProperties => ({
@@ -165,6 +174,7 @@ function MemorySettingsSliderItem({
 
 function relativeTime(isoStr: string): string {
     const diff = Date.now() - new Date(isoStr).getTime();
+    if (!Number.isFinite(diff)) return "时间未知";
     const mins = Math.floor(diff / 60000);
     if (mins < 1) return "刚刚";
     if (mins < 60) return `${mins}分钟前`;
@@ -189,16 +199,25 @@ type Props = {
     selectedCharId?: string;
     onSelectChar: (charId: string) => void;
     onNotice?: (msg: string) => void;
+    onMemorySourceChange?: () => void;
     filterOpen?: boolean;
     onFilterOpenChange?: (open: boolean) => void;
     onFilterStateChange?: (state: { visible: boolean; activeCount: number }) => void;
 };
 
-export function MemoryBankPage({
+export function MemoryBankPage(props: Props) {
+    const [mode, setMode] = useState<'life' | SpaceKind>(spaceUiMode);
+    const changeMode = (next: 'life' | SpaceKind) => { setSpaceUiMode(next); setMode(next); };
+    if (mode !== 'life') return <WorkspacePanel key={mode} kind={mode} onBack={() => changeMode('life')} />;
+    return <><button type="button" className={workspaceStyles.entry} onClick={() => changeMode('work')}>独立工作区 <span>工作对话与文件 · 不自动读写生活记忆</span></button><button type="button" className={workspaceStyles.entry} onClick={() => changeMode('private')}>AI私人空间 <span>日记、笔记、项目 · 可查看、编辑和导出</span></button><LifeMemoryBankPage {...props} /></>;
+}
+
+function LifeMemoryBankPage({
     view,
     selectedCharId,
     onSelectChar,
     onNotice,
+    onMemorySourceChange,
     filterOpen = false,
     onFilterOpenChange,
     onFilterStateChange,
@@ -228,6 +247,15 @@ export function MemoryBankPage({
 
     const disabledSourceCount = MEMORY_SOURCE_OPTIONS
         .filter(source => (config.shortTermAllowedSources ?? {})[source.key] === false).length;
+    const changeMemorySource = (memorySource: "local" | "shared") => {
+        const next = { ...config, memorySource };
+        setConfig(next); saveMemoryConfig(next); setMemoryEditor(null);
+        onMemorySourceChange?.();
+    };
+    const changeSharedRecall = (mode: "ombre" | "latent" | "off") => {
+        const next = { ...config, automaticRecallEnabled: mode !== "off", sharedRecallMode: mode === "off" ? config.sharedRecallMode ?? "ombre" : mode };
+        setConfig(next); saveMemoryConfig(next);
+    };
 
     // Resolve selected character object from ID
     const selectedChar = selectedCharId
@@ -257,6 +285,7 @@ export function MemoryBankPage({
     }, [activeTab, onFilterOpenChange, selectedCharId]);
 
     const loadCharacterList = useCallback(async (isCancelled?: () => boolean) => {
+        if (config.memorySource === "shared") { setCharacters([]); return; }
         const allChars = loadCharacters();
 
         let charIdsWithMem: string[] = [];
@@ -301,7 +330,7 @@ export function MemoryBankPage({
             setCharacters(prev => prev.map(item =>
                 item.character.id === info.character.id ? { ...item, shortTermCount: stCount } : item));
         }
-    }, []);
+    }, [config.memorySource]);
 
     useEffect(() => {
         let cancelled = false;
@@ -364,6 +393,7 @@ export function MemoryBankPage({
     };
 
     const handleDeleteEntry = async (id: string) => {
+        if (config.memorySource === "shared" || id.startsWith("ombre:")) { showNotice("共享记忆删除尚未开放，请先在共享面板中编辑纠错。"); return; }
         await deleteMemoryEntry(id);
         setCoreEntries(prev => prev.filter(e => e.id !== id));
         setLongTermEntries(prev => prev.filter(e => e.id !== id));
@@ -372,6 +402,7 @@ export function MemoryBankPage({
     };
 
     const handleClearEntries = async (type: "core" | "long_term") => {
+        if (config.memorySource === "shared") { showNotice("未清空共享正式库；共享批量删除尚未开放。"); return; }
         if (!selectedCharId) return;
         await deleteCharacterMemoriesByType(selectedCharId, type);
         if (type === "core") setCoreEntries([]);
@@ -409,7 +440,7 @@ export function MemoryBankPage({
                 range === "all" ? { force: true } : sinceTimestamp ? { sinceTimestamp } : undefined,
             );
             if (result.success) {
-                showNotice("总结完成");
+                showNotice(result.pending ? "可选审核已开启，总结已送入共享待确认区" : "总结完成");
                 loadDetailData(selectedCharId);
                 loadCharacterList();
             } else {
@@ -439,7 +470,7 @@ export function MemoryBankPage({
 
             const result = await runCoreMemoryPipeline(selectedCharId, selectedChar?.name ?? "");
             if (result.success) {
-                showNotice(result.rebuiltCount ? `核心记忆已重建（${result.rebuiltCount}条）` : "核心记忆已重建");
+                showNotice(result.pending ? "可选审核已开启，核心记忆已送入共享待确认区" : result.rebuiltCount ? `核心记忆已重建（${result.rebuiltCount}条）` : "核心记忆已重建");
                 loadDetailData(selectedCharId);
                 loadCharacterList();
             } else {
@@ -521,7 +552,7 @@ export function MemoryBankPage({
     };
 
     const maybeBuildManualMemoryEmbedding = async (type: MemoryEntry["type"], content: string): Promise<number[] | undefined> => {
-        if (type !== "long_term" || !config.vectorRecallEnabled) return undefined;
+        if (type !== "long_term" || !config.vectorRecallEnabled || config.memorySource === "shared") return undefined;
         const embeddingApiConfig = resolveAuxiliaryApiConfig("embeddingApiConfigId");
         if (!embeddingApiConfig || !resolveEmbeddingModel(embeddingApiConfig)) return undefined;
         try {
@@ -533,7 +564,7 @@ export function MemoryBankPage({
 
     const openCreateMemoryEditor = (type: MemoryEntry["type"]) => {
         setEntryMenuId(null);
-        setMemoryEditor({ type, content: "" });
+        setMemoryEditor({ type, content: "", clientId: createManualMemoryId(type) });
     };
 
     const openEditMemoryEditor = (entry: MemoryEntry) => {
@@ -562,7 +593,7 @@ export function MemoryBankPage({
             const embedding = type === "long_term"
                 ? (contentChanged ? await maybeBuildManualMemoryEmbedding(type, content) : source?.embedding)
                 : undefined;
-            const entry: MemoryEntry = source
+            let entry: MemoryEntry = source
                 ? {
                     ...source,
                     content,
@@ -575,7 +606,7 @@ export function MemoryBankPage({
                     },
                 }
                 : {
-                    id: createManualMemoryId(type),
+                    id: memoryEditor.clientId ?? createManualMemoryId(type),
                     characterId: selectedCharId,
                     sourceApp: "chat",
                     type,
@@ -589,7 +620,8 @@ export function MemoryBankPage({
                     },
                 };
 
-            await saveMemoryEntry(entry);
+            const saved = await saveMemoryEntry(entry, { userInitiated: true });
+            if (saved.entry) entry = saved.entry;
             if (type === "core") {
                 setCoreEntries(prev => source ? prev.map(item => item.id === entry.id ? entry : item) : [...prev, entry]);
             } else {
@@ -713,6 +745,14 @@ export function MemoryBankPage({
 
 
     // ── Detail View ──
+    if (config.memorySource === "shared" && view !== "settings") {
+        return <div className={`page-menu memory-settings-menu ${sharedMemoryStyles.page}`}>
+            <SharedMemoryPanel source="shared" onSourceChange={changeMemorySource} initiallyOpen recallMode={config.automaticRecallEnabled === false ? "off" : config.sharedRecallMode ?? "ombre"} onRecallModeChange={changeSharedRecall} />
+            <CodexGatewayPanel shared />
+            <SharedConsolidationPanel />
+            <UsageLedgerPanel />
+        </div>;
+    }
     if (view === "detail" && selectedChar) {
         return (
             <div className="flex flex-col absolute inset-0 overflow-hidden" style={{ padding: "0 16px" }}>
@@ -924,6 +964,10 @@ export function MemoryBankPage({
     }
 
     // ── Settings View ──
+    if (loadMemoryConfig().memorySource === "shared" && view === "settings") return <div className={`page-menu memory-settings-menu ${sharedMemoryStyles.page}`}>
+        <SharedMemoryPanel source="shared" onSourceChange={changeMemorySource} recallMode={config.automaticRecallEnabled === false ? "off" : config.sharedRecallMode ?? "ombre"} onRecallModeChange={changeSharedRecall} />
+        <SharedConsolidationPanel /><CodexGatewayPanel shared /><UsageLedgerPanel />
+    </div>;
     if (view === "settings") {
         const summaryStatus = selectedCharId ? loadMemorySummaryStatus(selectedCharId) : null;
         const summaryEventCount = selectedCharId ? getEventCounter(selectedCharId) : 0;
@@ -936,6 +980,40 @@ export function MemoryBankPage({
 
         return (
             <div className="page-menu memory-settings-menu">
+                <p className="menu-group-desc mx-2">本设备的记忆自动化 · 当前来源：{config.memorySource === "shared" ? "共享 Ombre" : "本机"}</p>
+                <div className="menu-group">
+                    <div className="menu-item">
+                        <MemorySettingsIcon icon={Brain} color={BINDING_ACCENTS.memory} />
+                        <div className="menu-label-group">
+                            <span className="menu-label">长期 / 核心记忆自动召回</span>
+                            <span className="menu-desc">关闭后不再自动注入；仍可浏览和手动检索。短期聊天历史保留，已进入上下文的旧内容不会自动消失。</span>
+                        </div>
+                        <div className="menu-right">
+                            <Toggle checked={config.automaticRecallEnabled !== false} onChange={value => {
+                                const next = { ...config, automaticRecallEnabled: value };
+                                setConfig(next); saveMemoryConfig(next);
+                            }} />
+                        </div>
+                    </div>
+                    <div className="menu-item">
+                        <MemorySettingsIcon icon={Archive} color={BINDING_ACCENTS.memory} />
+                        <div className="menu-label-group">
+                            <span className="menu-label">暂停程序写入记忆</span>
+                            <span className="menu-desc">阻止总结、AI 工具、自定义应用和现实桥保存记忆（含手动触发的 AI 总结）；面板中的手工新增、编辑与删除仍可使用。此开关不是写前审核。</span>
+                        </div>
+                        <div className="menu-right">
+                            <Toggle checked={config.automaticWritesPaused === true} onChange={value => {
+                                const next = { ...config, automaticWritesPaused: value };
+                                setConfig(next); saveMemoryConfig(next);
+                            }} />
+                        </div>
+                    </div>
+                </div>
+                <p className="menu-group-desc mx-2">共享服务</p>
+                <SharedMemoryPanel source={config.memorySource ?? "local"} onSourceChange={changeMemorySource} recallMode={config.automaticRecallEnabled === false ? "off" : config.sharedRecallMode ?? "ombre"} onRecallModeChange={changeSharedRecall} />
+                <CodexGatewayPanel shared={config.memorySource === "shared"} />
+                <UsageLedgerPanel />
+                <p className="menu-group-desc mx-2">上方开关仅控制本设备自动化。“共享”页签仍表示 Float 共同事件；Orbis 导入位于 VPS 共享记忆面板。</p>
                 {/* Manual summarize */}
                 {selectedCharId && (
                     <>
@@ -1135,10 +1213,10 @@ export function MemoryBankPage({
                         <MemorySettingsIcon icon={Brain} color={BINDING_ACCENTS.embedding} />
                         <div className="menu-label-group">
                             <span className="menu-label">核心记忆自动总结</span>
-                            <span className="menu-desc">每隔一定条数长期记忆，自动整理为核心记忆</span>
+                            <span className="menu-desc">{config.memorySource === "shared" ? "共享模式使用 Ombre 正式记录，不另生成 Float 核心副本" : "每隔一定条数长期记忆，自动整理为核心记忆"}</span>
                         </div>
                         <div className="menu-right">
-                            <Toggle checked={config.autoBuildCoreEnabled ?? true} onChange={(v) => {
+                            <Toggle checked={config.memorySource !== "shared" && (config.autoBuildCoreEnabled ?? true)} disabled={config.memorySource === "shared"} onChange={(v) => {
                                 const next = { ...config, autoBuildCoreEnabled: v };
                                 setConfig(next);
                                 saveMemoryConfig(next);

@@ -129,7 +129,8 @@ assert.equal(identity.resolveSessionCharacterIdentity(
   { contactId: "contact_deleted" }, contacts, characters,
 ), null, "an orphaned contact ID must fail closed rather than guess by display name");
 
-const now = new Date("2026-11-05T08:00:00.000Z");
+// Use local 08:00 so the 15:00 fixtures below stay in the future in every timezone.
+const now = new Date(2026, 10, 5, 8, 0, 0);
 // Match the production caller: day boundaries are local calendar midnights,
 // not UTC midnights. This keeps the same virtual day in DST and non-DST zones.
 const dayStart = new Date(now);

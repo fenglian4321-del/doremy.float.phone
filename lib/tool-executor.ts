@@ -55,7 +55,7 @@ import {
 } from "./system-calendar";
 import { bridgeConnection, loadBridgeDataItems, loadBridgeShortcutActions, readAllBridgeStateSnapshots, readBridgeStateSnapshot } from "./reality-bridge/storage";
 import { createShortcutCommand, deliverShortcutCommand, waitForShortcutCommand } from "./shortcut-command-client";
-import { loadMemoryEntriesByType, saveMemoryEntry } from "./memory-storage";
+import { loadMemoryConfig, loadMemoryEntriesByType, saveMemoryEntry } from "./memory-storage";
 import type { MemoryEntry } from "./memory-types";
 import { loadCharacters } from "./character-storage";
 import {
@@ -103,6 +103,7 @@ import {
 import { makeTimedWakeId, saveTimedWakeSchedule } from "./timed-wake-storage";
 import { resolveUserIdentity } from "./settings-storage";
 import { attachAbortSignal, isAbortError, throwIfAborted } from "./abort-utils";
+import { executeCodexGatewayTool, isCodexGatewayTool } from "./codex-gateway-client";
 import {
     deleteShortcutCommandMediaUrl,
     registerShortcutCommandMediaCleanup,
@@ -543,6 +544,10 @@ async function executeSingleToolCall(
     hint: ToolExecutionHint,
 ): Promise<ToolResult> {
     throwIfAborted(context?.signal);
+    if (isCodexGatewayTool(call.name)) {
+        try { return { name: call.name, success: true, data: await executeCodexGatewayTool(call.name, call.args, context) }; }
+        catch (error) { throwIfAborted(context?.signal); return { name: call.name, success: false, error: error instanceof Error ? error.message : "Codex 工具执行失败。" }; }
+    }
     const preferredType = hint.toolType && hint.toolType !== "auto" && hint.toolType !== "script" ? hint.toolType : undefined;
     const restTools = loadRestTools();
     const restPackages = loadRestToolPackages();
@@ -3535,6 +3540,7 @@ async function executeMemoryWriteTool(
     capability: InternalCapabilityConfig,
     context?: ToolExecutionContext,
 ): Promise<ToolResult> {
+    if (loadMemoryConfig().memorySource === "shared") return { name: "写入记忆", success: false, error: "共享记忆由对话阈值整理任务收集有原文证据的事实，不再逐回复调用旧写入工具。", continueConversation: false, persistToHistory: false };
     if (!isSupportedChatToolContext(context) || !context.sessionId) {
         return {
             name: "写入记忆",
@@ -3592,7 +3598,7 @@ async function executeMemoryWriteTool(
         ...(reason ? { reason } : {}),
     };
 
-    if (capability.mode === "confirm") {
+    if (capability.mode === "confirm" && loadMemoryConfig().memorySource !== "shared") {
         return {
             name: "写入记忆",
             success: true,
@@ -3683,6 +3689,7 @@ function normalizeMemoryContent(text: string): string {
 }
 
 async function isDuplicateLongTermMemory(characterId: string, content: string): Promise<boolean> {
+    if (loadMemoryConfig().memorySource === "shared") return false; // The canonical service deduplicates automatic writes.
     const entries = await loadMemoryEntriesByType(characterId, "long_term");
     const recent = entries.slice(-20);
     const normalized = normalizeMemoryContent(content);
@@ -3723,7 +3730,11 @@ async function persistMemoryWriteRequest(
         },
     };
 
-    await saveMemoryEntry(entry);
+    const saved = await saveMemoryEntry(entry, { userInitiated: options?.approvedByUser });
+    if (saved.state === "pending") {
+        return { name: "写入记忆", success: true, data: "可选写前审核已开启，这条记忆在共享库待确认区，尚未进入正式检索。",
+            continueConversation: false, persistToHistory: false, userNotice: "已送入共享记忆待确认区" };
+    }
 
     return {
         name: "写入记忆",

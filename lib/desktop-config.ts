@@ -34,6 +34,7 @@ export type IconId =
   | "archive"
   | "photowall"
   | "watchtogether"
+  | "xinchao"
   | "callstats"
 ;
 
@@ -76,7 +77,7 @@ export const PAGE_2_DEFAULT: IconId[] = [
 
 // 第三页放系统/工具类应用；生活、档案、照片墙、一起看单独放到第四页，避免与已有图标/组件抢位置。
 export const PAGE_3_DEFAULT: IconId[] = ["worldbuilder", "qa", "resource_hub", "realitybridge", "mixology"];
-export const PAGE_4_DEFAULT: IconId[] = ["life", "archive", "photowall", "watchtogether", "callstats"];
+export const PAGE_4_DEFAULT: IconId[] = ["life", "archive", "photowall", "watchtogether", "callstats", "xinchao"];
 
 export const DOCK_DEFAULT: IconId[] = ["settings", "theme", "resources", "characters"];
 
@@ -136,5 +137,6 @@ export const ICONS: Record<IconId, IconMeta> = {
   archive: { id: "archive", label: "档案室", tone: "var(--c-icon-teal)", placeholder: false },
   photowall: { id: "photowall", label: "照片墙", tone: "var(--c-icon-rose)", placeholder: false },
   watchtogether: { id: "watchtogether", label: "一起看", tone: "var(--c-icon-sage, #7e8b78)", placeholder: false },
+  xinchao: { id: "xinchao", label: "心潮", tone: "var(--c-icon-sage, #7e9a89)", placeholder: false },
   callstats: { id: "callstats", label: "通话统计", tone: "var(--c-icon-teal)", placeholder: false },
 };

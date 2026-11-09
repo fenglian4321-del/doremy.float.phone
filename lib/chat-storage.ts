@@ -123,7 +123,7 @@ export type ChatMessageStatus = "sending" | "sent" | "read" | "failed" | "reject
 export type ChatMessageRole = "user" | "assistant" | "system" | "tool";
 
 export type StateValue = { name: string; value: number };
-export type NativeToolCallRecord = { id: string; name: string; args: Record<string, unknown>; thoughtSignature?: string };
+export type NativeToolCallRecord = { id: string; name: string; args: Record<string, unknown>; thoughtSignature?: string; providerCallId?: string };
 export type NativeToolResultRecord = { toolCallId: string; name: string; content: string };
 
 export type ChatMessage = {

@@ -47,3 +47,6 @@ android-shell/**/build/
 *.jks
 *.p12
 *.pfx
+
+# Task-local scratch files are not repository source.
+/work/

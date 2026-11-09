@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'none'; img-src 'none'; base-uri 'none'; form-action 'none'">
+    <meta name="referrer" content="no-referrer">
+    <title>Float · 记忆星海</title>
+    <link rel="stylesheet" href="./frame.css">
+    <script type="module" src="./frame.js"></script>
+</head>
+<body>
+    <canvas id="bg" aria-hidden="true"></canvas><canvas id="mc" aria-hidden="true"></canvas>
+    <nav aria-label="星图操作"><button id="back" type="button" aria-label="返回上一层">←</button><span id="path">记忆宇宙</span><div class="zoom"><button id="minus" type="button" aria-label="缩小星图">−</button><button id="plus" type="button" aria-label="放大星图">＋</button><button id="reset" type="button" aria-label="重置星图">↺</button></div></nav>
+    <span id="tooltip" role="tooltip" hidden></span>
+    <div class="picker"><label for="choice">文字导航</label><select id="choice" aria-label="按文字选择星系、星座或记忆"><option value="">请选择…</option></select></div>
+</body>
+</html>

@@ -2,6 +2,8 @@
 // Unified API helpers — single source of truth for provider URL resolution,
 // request headers, and response parsing. All LLM-calling modules should use these.
 
+import { normalizeTokenUsage as extractUsage } from "./token-usage";
+import { fetchWithUsage } from "./usage-fetch";
 import type { ApiConfig } from "./settings-types";
 import { pushApiLog } from "./api-log-store";
 
@@ -160,7 +162,9 @@ export async function simpleLLMCall(
         const bodyTokenEstimate = Math.ceil(bodySize / 3);
         console.log("[simpleLLMCall] Request:", { url: fetchUrl.slice(0, 80), bodySize, bodyTokenEstimate, model: config.defaultModel });
 
-        const res = await fetch(fetchUrl, { method: "POST", headers, body, signal: options?.signal });
+        const res = await fetchWithUsage(fetchUrl, { method: "POST", headers, body, signal: options?.signal }, {
+            provider: config.provider, model: config.defaultModel, configId: config.id, source: "background", reason: "auxiliary",
+        });
 
         if (!res.ok) {
             const errText = await res.text().catch(() => "");
@@ -209,18 +213,7 @@ export async function simpleLLMCall(
     }
 }
 
-export function extractUsage(data: Record<string, unknown>): { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number } | undefined {
-    if (!data) return undefined;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const d = data as any;
-    const usage = d?.usage ?? d?.output?.usage ?? d?.candidates?.[0]?.usageMetadata;
-    if (!usage) return undefined;
-    return {
-        prompt_tokens: usage.prompt_tokens ?? usage.input_tokens ?? usage.promptTokenCount,
-        completion_tokens: usage.completion_tokens ?? usage.output_tokens ?? usage.candidatesTokenCount,
-        total_tokens: usage.total_tokens ?? usage.totalTokenCount,
-    };
-}
+export { normalizeTokenUsage as extractUsage } from "./token-usage";
 
 export function extractFinishReason(data: Record<string, unknown>): string | undefined {
     if (!data) return undefined;

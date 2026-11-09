@@ -7,6 +7,7 @@ const gradle = read("android-shell/app/build.gradle");
 const activity = read("android-shell/app/src/main/java/app/floatphone/shell/MainActivity.kt");
 
 const intentionallyUnusedPermissions = [
+  "android.permission.MANAGE_EXTERNAL_STORAGE",
   "android.permission.READ_CONTACTS",
   "android.permission.READ_MEDIA_IMAGES",
   "android.permission.READ_MEDIA_AUDIO",

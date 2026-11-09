@@ -17,8 +17,8 @@ Android Shell 是一个原生 Android 应用外壳：使用 WebView 加载用户
 
 | 配置 | 值 |
 |---|---:|
-| versionName | 1.0.29 |
-| versionCode | 28 |
+| versionName | 1.0.30 |
+| versionCode | 29 |
 | minSdk | 26 |
 | targetSdk | 34 |
 | compileSdk | 36 |
@@ -130,3 +130,9 @@ android-shell/
 ```
 
 实际文件和类名以当前分支为准。网页与原生之间的桥接方法应同时核对网页调用端和 Kotlin 接收端，不能只看其中一侧。
+
+## 9. 1.0.30 授权目录源码
+
+新增绑定当前work/private空间的SAF文字目录桥，首版为用户手动列出、读取与另存新文件，不开放覆盖/删除或AI自主目录执行。复用原安全桥，未新增全盘文件权限。必须重新构建同签名APK并完成提供器/真机验证；当前代码任务没有完整Android构建环境，只有静态与独立Java策略验证。
+
+协议、限制、失败核对及CI构建路径见[第十三阶段说明](../docs/private-memory-phase13-phone-files-usage.md)。旧APK或普通浏览器不能因网页更新而自动获得目录能力。

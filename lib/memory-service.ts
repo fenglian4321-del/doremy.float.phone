@@ -2,10 +2,11 @@
 // High-level memory orchestration: retrieve long-term memories for prompt injection.
 
 import type { MemoryConfig, MemoryEntry } from "./memory-types";
-import { loadMemoryEntriesByType } from "./memory-storage";
+import { loadMemoryConfig, loadMemoryEntriesByType } from "./memory-storage";
 import { resolveAuxiliaryApiConfig } from "./settings-storage";
 import { generateEmbedding, resolveEmbeddingModel, cosineSimilarity } from "./memory-embedding";
 import { estimateTokens } from "./token-counter";
+import { loadSharedMemoryEntries, noteSharedMemoryRecall } from "./shared-memory-client";
 
 /**
  * Retrieve relevant long-term memories for prompt injection.
@@ -20,7 +21,16 @@ export async function retrieveMemoriesForPrompt(
     currentContext: string,
     config: MemoryConfig
 ): Promise<MemoryEntry[]> {
+    if (config.automaticRecallEnabled === false || loadMemoryConfig().automaticRecallEnabled === false) return [];
+    if (!currentContext.trim()) return [];
+    if (loadMemoryConfig().memorySource === "shared") {
+        const entries = await loadSharedMemoryEntries(characterId, currentContext, loadMemoryConfig().sharedRecallMode ?? "ombre");
+        const result = fillByBudget(entries.filter(entry => entry.type === "long_term"), config.longTermTokenBudget);
+        void noteSharedMemoryRecall(result).catch(() => undefined); // Activation bookkeeping must not block successfully read facts.
+        return result;
+    }
     const longTermEntries = await loadMemoryEntriesByType(characterId, "long_term");
+    if (loadMemoryConfig().automaticRecallEnabled === false) return [];
     if (longTermEntries.length === 0 || !currentContext.trim()) return [];
 
     const budget = config.longTermTokenBudget;
@@ -33,7 +43,7 @@ export async function retrieveMemoriesForPrompt(
 
     // Strategy 1: all fit within budget → return all
     if (totalTokens <= budget) {
-        return longTermEntries;
+        return fillByBudget(longTermEntries, budget);
     }
 
     // Strategy 2: vector recall enabled + embedding API configured → vector search, fill by relevance
@@ -64,6 +74,7 @@ export async function retrieveCoreMemoriesForPrompt(
     characterId: string,
     config: MemoryConfig,
 ): Promise<MemoryEntry[]> {
+    if (config.automaticRecallEnabled === false || loadMemoryConfig().automaticRecallEnabled === false) return [];
     const coreEntries = await loadMemoryEntriesByType(characterId, "core");
     if (coreEntries.length === 0) return [];
 
@@ -76,17 +87,25 @@ export async function retrieveCoreMemoriesForPrompt(
         return bDate.localeCompare(aDate);
     });
 
-    return fillByBudget(sorted, config.coreMemoryTokenBudget);
+    const result = fillByBudget(sorted, config.coreMemoryTokenBudget);
+    if (loadMemoryConfig().memorySource === "shared") void noteSharedMemoryRecall(result).catch(() => undefined);
+    return result;
 }
 
-/** Pick entries in order until token budget is exhausted. */
+/** Pick whole entries in order, skipping candidates that exceed the remaining budget. */
 function fillByBudget(entries: MemoryEntry[], budget: number): MemoryEntry[] {
+    if (loadMemoryConfig().automaticRecallEnabled === false) return [];
     const result: MemoryEntry[] = [];
+    const seenIds = new Set<string>();
+    const seenContents = new Set<string>();
     let used = 0;
     for (const entry of entries) {
+        const content = entry.content.trim();
+        if (!content || seenIds.has(entry.id) || seenContents.has(content)) continue;
         const tokens = estimateTokens(entry.content) + 4;
-        if (used + tokens > budget) break;
+        if (used + tokens > budget) continue;
         result.push(entry);
+        seenIds.add(entry.id); seenContents.add(content);
         used += tokens;
     }
     return result;

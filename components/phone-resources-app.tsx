@@ -17,7 +17,7 @@ const RESOURCE_MENU: Omit<FeaturedCardItem, "onClick">[] = [
         id: "memory",
         icon: Brain,
         label: "记忆库",
-        desc: "角色记忆档案",
+        desc: "查看与管理记忆",
         iconColor: BINDING_ACCENTS.memory,
         glassIcon: "memory",
     },
@@ -46,6 +46,12 @@ export function PhoneResourcesApp({ onClose, onNotice, initialPage }: { onClose:
 
     const handleMemoryFilterStateChange = useCallback((state: { visible: boolean; activeCount: number }) => {
         setMemoryFilterState(state);
+    }, []);
+
+    const handleMemorySourceChange = useCallback(() => {
+        setMemoryCharId(""); setMemoryCharName(""); setMemoryFilterOpen(false);
+        setPrevMemoryView("list");
+        setMemoryView(current => current === "settings" ? current : "list");
     }, []);
 
     useEffect(() => {
@@ -160,6 +166,7 @@ export function PhoneResourcesApp({ onClose, onNotice, initialPage }: { onClose:
                         selectedCharId={memoryCharId}
                         onSelectChar={handleSelectChar}
                         onNotice={onNotice}
+                        onMemorySourceChange={handleMemorySourceChange}
                         filterOpen={memoryFilterOpen}
                         onFilterOpenChange={handleMemoryFilterOpenChange}
                         onFilterStateChange={handleMemoryFilterStateChange}

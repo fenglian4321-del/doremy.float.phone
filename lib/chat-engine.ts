@@ -1,3 +1,10 @@
+import type { UsageReason } from "./usage-ledger";
+import { allowedXinchaoLayers, noteXinchaoChatStatus, prepareXinchaoChatLayer } from "./xinchao-chat";
+import { redactXinchaoLayers, withoutXinchaoLayers } from "./xinchao-ephemeral";
+import { beginConsolidation, projectConsolidation, notifyConsolidation, type ConsolidationProjection, type ConsolidationRun } from "./consolidation-client";
+import { createPrivateDecisionStreamFilter, extractPrivateDecision, insertConsolidationLayer } from "./consolidation-protocol";
+import { guardConsolidationBudget } from "./consolidation-budget";
+import type { TokenUsage } from "./token-usage";
 // lib/chat-engine.ts
 
 import { createSseJsonParser } from "./sse-json";
@@ -19,6 +26,7 @@ import {
     loadChatAppSettings,
     getMaxToolRounds,
     loadChatSessions,
+    loadChatMessages,
     saveChatSessions,
     getLatestCharacterStateValues,
     normalizeVisionImagePromptLimit,
@@ -408,9 +416,12 @@ export type DebugPromptRequestOptions = {
     appId?: string;
     appTags?: string[];
     debugSessionId?: string;
+    usageReason?: UsageReason;
 };
 
 type ChatPromptBuildOptions = {
+    privateMemory?: ConsolidationRun;
+    privateMemorySlot?: { current?: ConsolidationRun };
     followUpCount?: number;
     followUpDelay?: number;
     timedWakeElapsedMinutes?: number;
@@ -620,7 +631,7 @@ export function publishDebugPromptSnapshot(params: {
         sessionId: options?.debugSessionId,
         characterName: meta?.characterName,
         presetName: preset?.name || "默认预设",
-        messages: debugMessagesFromRequest(request),
+        messages: redactXinchaoLayers(debugMessagesFromRequest(request)),
         tools: tools?.map(tool => ({ name: tool.name, description: tool.description })),
     };
     if (typeof window !== "undefined") setDebugPromptSnapshot(snapshot);
@@ -877,30 +888,36 @@ export async function sendLLMStreamRequest(
         appTags?: string[];
         followUpCount?: number;
         debugSessionId?: string;
+    usageReason?: UsageReason;
         signal?: AbortSignal;
+        privateMemory?: ConsolidationRun;
     },
     callbacks?: ChatCompletionStreamCallbacks,
 ): Promise<ChatCompletionStreamResult> {
     const pluginPurpose = options?.appId ?? "chat";
-    const afterPlugins = await applyChatPluginLlmRequest(preset, messages, pluginPurpose, options?.debugSessionId);
+    const afterPlugins = await applyChatPluginLlmRequest(preset, allowedXinchaoLayers(messages), pluginPurpose, options?.debugSessionId);
     const effectivePreset = afterPlugins.preset;
     const originalOnDelta = callbacks?.onDelta;
+    const privateFilter = createPrivateDecisionStreamFilter();
     const pluginCallbacks: ChatCompletionStreamCallbacks | undefined = callbacks ? {
         ...callbacks,
         onDelta: (text: string) => {
+            text = privateFilter.push(text);
+            if (!text) return;
             emitChatPluginEvent("llm.streamChunk", { chunk: text, sessionId: options?.debugSessionId, purpose: pluginPurpose });
             return originalOnDelta?.(text);
         },
     } : undefined;
-    const requestMessages = toLlmRequestMessages(afterPlugins.messages);
+    const requestMessages = toLlmRequestMessages(allowedXinchaoLayers(afterPlugins.messages));
     const request = buildProviderRequest(config, effectivePreset, requestMessages, { stream: true });
+    if (options?.privateMemory) { const values = guardConsolidationBudget(request, config); options.privateMemory.noteBudget?.(values); }
     publishDebugPromptSnapshot({ request, config, preset: effectivePreset, meta, options, requestKind: "completion" });
     const llmAbort = new AbortController();
     const llmTimeout = setTimeout(() => llmAbort.abort(), 500_000);
     const detachExternalAbort = attachExternalAbort(llmAbort, options?.signal);
 
     try {
-        const response = await fetchLlmPayload(request, { signal: llmAbort.signal });
+        const response = await fetchLlmPayload(request, { signal: llmAbort.signal, usageContext: { provider: config.provider, model: config.defaultModel, configId: config.id, source: apiLogChannelFor(options).channel === "qa" ? "qa" : "chat", scopeId: options?.debugSessionId, reason: options?.usageReason ?? "unknown" } });
         if (!response.ok) {
             const errorText = await response.text();
             throw new ChatEngineError(`API Stream Error ${response.status}: ${errorText}`);
@@ -916,11 +933,12 @@ export async function sendLLMStreamRequest(
                 await (pluginCallbacks ?? callbacks)?.onReasoningDelta?.(text);
             },
         };
-        const { content: streamedContent, rawResponse } = await readSseStream(response, request.providerKind, streamLogCallbacks, !options?.skipTimestampStrip);
+        const { content: streamedContent, rawResponse } = await readSseStream(response, request.providerKind, streamLogCallbacks, !options?.skipTimestampStrip && !options?.privateMemory);
         if (!streamedContent.trim()) {
             throw new ChatEngineError("流式响应没有解析到文本增量。");
         }
-        let rawOutput = options?.skipTimestampStrip ? streamedContent.trim() : stripHallucinatedTimestamps(streamedContent.trim());
+        let rawOutput = options?.skipTimestampStrip || options?.privateMemory ? streamedContent.trim() : stripHallucinatedTimestamps(streamedContent.trim());
+        rawOutput = options?.privateMemory ? options.privateMemory.capture(rawOutput) : extractPrivateDecision(rawOutput).text;
         rawOutput = await applyChatPluginLlmResponse(rawOutput, pluginPurpose, options?.debugSessionId);
 
         // Store API log entry — mirror sendLLMRequest so streaming calls also show up
@@ -983,14 +1001,17 @@ export async function sendLLMRequest(
         appTags?: string[];
         followUpCount?: number;
         debugSessionId?: string;
+    usageReason?: UsageReason;
         signal?: AbortSignal;
+        privateMemory?: ConsolidationRun;
     },
 ): Promise<string> {
     const pluginPurpose = options?.appId ?? "chat";
-    const afterPlugins = await applyChatPluginLlmRequest(preset, messages, pluginPurpose, options?.debugSessionId);
+    const afterPlugins = await applyChatPluginLlmRequest(preset, allowedXinchaoLayers(messages), pluginPurpose, options?.debugSessionId);
     const effectivePreset = afterPlugins.preset;
-    const requestMessages = toLlmRequestMessages(afterPlugins.messages);
+    const requestMessages = toLlmRequestMessages(allowedXinchaoLayers(afterPlugins.messages));
     const request = buildProviderRequest(config, effectivePreset, requestMessages);
+    if (options?.privateMemory) { const values = guardConsolidationBudget(request, config); options.privateMemory.noteBudget?.(values); }
     publishDebugPromptSnapshot({ request, config, preset: effectivePreset, meta, options, requestKind: "completion" });
     const requestBodyJson = JSON.stringify(request.body);
     const requestBodySize = requestBodyJson.length;
@@ -1022,7 +1043,7 @@ export async function sendLLMRequest(
     const detachExternalAbort = attachExternalAbort(llmAbort, options?.signal);
 
     try {
-        const response = await fetchLlmPayload(request, { signal: llmAbort.signal });
+        const response = await fetchLlmPayload(request, { signal: llmAbort.signal, usageContext: { provider: config.provider, model: config.defaultModel, configId: config.id, source: apiLogChannelFor(options).channel === "qa" ? "qa" : "chat", scopeId: options?.debugSessionId, reason: options?.usageReason ?? "unknown" } });
 
         if (!response.ok) {
             const errorText = await response.text();
@@ -1030,7 +1051,7 @@ export async function sendLLMRequest(
         }
 
         const data = await response.json();
-        const parsed = parseProviderResponse(request.providerKind, data);
+        const parsed = parseProviderResponse(request.providerKind, data, { preservePrivateDecision: Boolean(options?.privateMemory) });
         let rawOutput = parsed.content || "";
 
         if (parsed.reasoning) {
@@ -1045,9 +1066,11 @@ export async function sendLLMRequest(
             }
         }
 
+        rawOutput = options?.privateMemory ? options.privateMemory.capture(rawOutput, parsed.toolCalls.length > 0) : extractPrivateDecision(rawOutput).text;
+        rawOutput = stripHallucinatedTimestamps(rawOutput);
         rawOutput = await applyChatPluginLlmResponse(rawOutput, pluginPurpose, options?.debugSessionId);
 
-        if (!rawOutput && parsed.toolCalls.length === 0) {
+        if (!rawOutput && parsed.toolCalls.length === 0 && !options?.privateMemory?.manual) {
             const emptyDetails = emptyResponseDetails(parsed.raw);
             console.warn("[ChatEngine] Empty response from API!", {
                 provider: config.provider,
@@ -1113,11 +1136,12 @@ export type LLMToolRequestResult = {
     truncatedToolCalls?: string[];
     rawResponse: string;
     providerKind: LlmProviderKind;
-    usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number };
+    usage?: TokenUsage;
 };
 
 type StreamToolCallDraft = {
     id?: string;
+    providerCallId?: string;
     name?: string;
     argsText: string;
     args?: Record<string, unknown>;
@@ -1128,6 +1152,7 @@ function mergeToolCallDelta(drafts: Map<number, StreamToolCallDraft>, delta: Llm
     const current = drafts.get(delta.index) || { argsText: "" };
     drafts.set(delta.index, {
         id: delta.id ?? current.id,
+        providerCallId: delta.providerCallId ?? current.providerCallId,
         name: delta.name ?? current.name,
         argsText: current.argsText + (delta.argsText ?? ""),
         args: delta.args ?? (delta.argsText ? undefined : current.args),
@@ -1157,6 +1182,7 @@ function finalizeStreamToolCalls(drafts: Map<number, StreamToolCallDraft>): { ca
         }
         const call: LlmToolCall = {
             id: draft.id || `tool_${Date.now()}_${index}`,
+            ...(draft.providerCallId ? { providerCallId: draft.providerCallId } : {}),
             name: draft.name,
             args: args as Record<string, unknown>,
         };
@@ -1178,7 +1204,9 @@ export async function sendLLMToolStreamRequest(
         appTags?: string[];
         followUpCount?: number;
         debugSessionId?: string;
+    usageReason?: UsageReason;
         signal?: AbortSignal;
+        privateMemory?: ConsolidationRun;
         /** 单次最大输出 token：按调用覆盖预设值（工坊输出护栏用） */
         maxTokens?: number;
     },
@@ -1186,9 +1214,10 @@ export async function sendLLMToolStreamRequest(
 ): Promise<LLMToolRequestResult> {
     void regexes;
     const pluginPurpose = options?.appId ?? "chat";
-    const afterPlugins = await applyChatPluginLlmRequest(preset, messages, pluginPurpose, options?.debugSessionId);
+    const afterPlugins = await applyChatPluginLlmRequest(preset, allowedXinchaoLayers(messages), pluginPurpose, options?.debugSessionId);
     const effectivePreset = afterPlugins.preset;
-    const request = buildProviderRequest(config, effectivePreset, afterPlugins.messages, { tools, stream: true, maxTokens: options?.maxTokens });
+    const request = buildProviderRequest(config, effectivePreset, allowedXinchaoLayers(afterPlugins.messages), { tools, stream: true, maxTokens: options?.maxTokens });
+    if (options?.privateMemory) { const values = guardConsolidationBudget(request, config); options.privateMemory.noteBudget?.(values); }
     publishDebugPromptSnapshot({ request, config, preset: effectivePreset, meta, options, requestKind: "native-tools-stream", tools });
     const llmAbort = new AbortController();
     const llmTimeout = setTimeout(() => llmAbort.abort(), 500_000);
@@ -1197,11 +1226,12 @@ export async function sendLLMToolStreamRequest(
     let content = "";
     let reasoning = "";
     const contentStripper = createStreamingTimestampStripper();
+    const privateFilter = createPrivateDecisionStreamFilter();
     const toolDrafts = new Map<number, StreamToolCallDraft>();
     const firedToolCallStarts = new Set<number>();
 
     try {
-        const response = await fetchLlmPayload(request, { signal: llmAbort.signal });
+        const response = await fetchLlmPayload(request, { signal: llmAbort.signal, usageContext: { provider: config.provider, model: config.defaultModel, configId: config.id, source: apiLogChannelFor(options).channel === "qa" ? "qa" : "chat", scopeId: options?.debugSessionId, reason: options?.usageReason ?? "unknown" } });
 
         if (!response.ok) {
             const errorText = await response.text();
@@ -1223,11 +1253,14 @@ export async function sendLLMToolStreamRequest(
                         await callbacks?.onReasoningDelta?.(delta.reasoning);
                     }
                     if (delta.content) {
-                        const cleanDelta = contentStripper.push(delta.content);
+                        const cleanDelta = options?.privateMemory ? delta.content : contentStripper.push(delta.content);
                         if (cleanDelta) {
                             content += cleanDelta;
-                            emitChatPluginEvent("llm.streamChunk", { chunk: cleanDelta, sessionId: options?.debugSessionId, purpose: pluginPurpose });
-                            await callbacks?.onDelta?.(cleanDelta);
+                            const visibleDelta = privateFilter.push(cleanDelta);
+                            if (visibleDelta) {
+                                emitChatPluginEvent("llm.streamChunk", { chunk: visibleDelta, sessionId: options?.debugSessionId, purpose: pluginPurpose });
+                                await callbacks?.onDelta?.(visibleDelta);
+                            }
                         }
                     }
                     for (const toolDelta of delta.toolCallDeltas || []) {
@@ -1273,11 +1306,13 @@ export async function sendLLMToolStreamRequest(
         for (const data of sseParser.flush()) {
             await handleParsedDelta(data);
         }
-        const finalContent = contentStripper.flush();
+        const finalContent = options?.privateMemory ? "" : contentStripper.flush();
         if (finalContent) {
             content += finalContent;
-            await callbacks?.onDelta?.(finalContent);
+            await callbacks?.onDelta?.(privateFilter.push(finalContent));
         }
+        const finalTools = finalizeStreamToolCalls(toolDrafts);
+        content = options?.privateMemory ? options.privateMemory.capture(content, finalTools.calls.length > 0) : extractPrivateDecision(content).text;
         content = await applyChatPluginLlmResponse(content, pluginPurpose, options?.debugSessionId);
 
         const sanitizedMessages = request.messagesForLog.map(m => ({
@@ -1336,20 +1371,23 @@ export async function sendLLMToolRequest(
         appTags?: string[];
         followUpCount?: number;
         debugSessionId?: string;
+    usageReason?: UsageReason;
         signal?: AbortSignal;
+        privateMemory?: ConsolidationRun;
     },
 ): Promise<LLMToolRequestResult> {
     const pluginPurpose = options?.appId ?? "chat";
-    const afterPlugins = await applyChatPluginLlmRequest(preset, messages, pluginPurpose, options?.debugSessionId);
+    const afterPlugins = await applyChatPluginLlmRequest(preset, allowedXinchaoLayers(messages), pluginPurpose, options?.debugSessionId);
     const effectivePreset = afterPlugins.preset;
-    const request = buildProviderRequest(config, effectivePreset, afterPlugins.messages, { tools });
+    const request = buildProviderRequest(config, effectivePreset, allowedXinchaoLayers(afterPlugins.messages), { tools });
+    if (options?.privateMemory) { const values = guardConsolidationBudget(request, config); options.privateMemory.noteBudget?.(values); }
     publishDebugPromptSnapshot({ request, config, preset: effectivePreset, meta, options, requestKind: "native-tools", tools });
     const llmAbort = new AbortController();
     const llmTimeout = setTimeout(() => llmAbort.abort(), 500_000);
     const detachExternalAbort = attachExternalAbort(llmAbort, options?.signal);
 
     try {
-        const response = await fetchLlmPayload(request, { signal: llmAbort.signal });
+        const response = await fetchLlmPayload(request, { signal: llmAbort.signal, usageContext: { provider: config.provider, model: config.defaultModel, configId: config.id, source: apiLogChannelFor(options).channel === "qa" ? "qa" : "chat", scopeId: options?.debugSessionId, reason: options?.usageReason ?? "unknown" } });
 
         if (!response.ok) {
             const errorText = await response.text();
@@ -1357,11 +1395,13 @@ export async function sendLLMToolRequest(
         }
 
         const data = await response.json();
-        const parsed = parseProviderResponse(request.providerKind, data);
+        const parsed = parseProviderResponse(request.providerKind, data, { preservePrivateDecision: Boolean(options?.privateMemory) });
         let rawOutput = parsed.content || "";
         if (options?.includeReasoning && parsed.reasoning) {
             rawOutput = `<think>\n${parsed.reasoning}\n</think>\n\n${rawOutput}`;
         }
+        rawOutput = options?.privateMemory ? options.privateMemory.capture(rawOutput, parsed.toolCalls.length > 0) : extractPrivateDecision(rawOutput).text;
+        rawOutput = stripHallucinatedTimestamps(rawOutput);
         rawOutput = await applyChatPluginLlmResponse(rawOutput, pluginPurpose, options?.debugSessionId);
 
         if (!rawOutput && parsed.toolCalls.length === 0) {
@@ -1618,6 +1658,7 @@ export function nativeToolSourceKey(tool: EnabledTool): string {
 }
 
 export function isNativeSingleTool(tool: EnabledTool): boolean {
+    if (tool.source === "codex_gateway") return true;
     if (tool.source === "rest") return true;
     if (tool.source === "composite") return true;
     if (tool.source === "custom_app") return true;
@@ -1865,6 +1906,7 @@ export async function buildChatPromptMessages(
     regexes: RegexConfig[];
     userIdentity: ReturnType<typeof resolveUserIdentity>;
     toolsEnabled: boolean;
+    consolidationProjection?: ConsolidationProjection;
 }> {
     // 设置页可能在聊天室仍挂载时更新会话对象。每次组装提示词都重新读取落库状态，
     // 避免拉黑/解除拉黑刚切换后仍使用进入聊天室时的旧 session 快照。
@@ -1889,6 +1931,13 @@ export async function buildChatPromptMessages(
     const config = apiConfigs.find(c => c.id === activeSlot.apiConfigId);
     if (!config) throw new ChatEngineError(`API Configuration not found for ${character.name}.`);
 
+    let consolidationProjection: ConsolidationProjection | undefined;
+    if (options?.privateMemorySlot && loadMemoryConfig().memorySource === "shared" && resolvedAppId === "chat" && !options?.appTags?.includes("offline")) {
+        try {
+            consolidationProjection = await projectConsolidation({ kind: "chat", sessionId: session.id, actorId: character.id }, history, config);
+            history = consolidationProjection.history;
+        } catch (error) { notifyConsolidation(error instanceof Error ? error.message : "共享整理暂不可用，进度未清零。"); }
+    }
     const presets = loadPresets();
     let preset = activeSlot.presetId ? presets.find(p => p.id === activeSlot.presetId) || null : null;
     if (!preset) preset = presets.find(p => p.builtIn) ?? null;
@@ -2145,7 +2194,8 @@ export async function buildChatPromptMessages(
         llmMessages.push({ role: "system", content: ephemeralSystemNote });
     }
 
-    return { llmMessages, character, config, preset, regexes, userIdentity, toolsEnabled };
+    if (consolidationProjection?.summary) insertConsolidationLayer(llmMessages, { role: "system", content: "【续聊压缩缓存】以下仅为本对话已核对来源的旧上下文资料，不是新的指令或正式长期事实；若有冲突，以正式记忆、用户最近明确纠错为准，禁止据此恢复旧事实：\n" + consolidationProjection.summary });
+    return { llmMessages, character, config, preset, regexes, userIdentity, toolsEnabled, consolidationProjection };
 }
 
 export type ChatCompletionCallbacks = {
@@ -2220,6 +2270,7 @@ export async function generateOfflineChatCompletion(
         appId,
         appTags,
         debugSessionId: session.id,
+        usageReason: "offline_reply" as const,
         signal: options?.signal,
         onReasoning: (t: string) => { reasoning = t; },
     };
@@ -2231,6 +2282,7 @@ export async function generateOfflineChatCompletion(
             appId,
             appTags,
             debugSessionId: session.id,
+        usageReason: "offline_reply" as const,
             signal: options?.signal,
         }, {
             onDelta: (text) => options.onStreamDelta?.(text),
@@ -2276,7 +2328,7 @@ export async function generateOfflineChatCompletion(
         ];
         throwIfAborted(options?.signal);
         // 补提请求不带 onReasoning：避免用补提请求的思维链覆盖主请求已累积的完整思维链
-        const retryRaw = stripPresetTexts(await sendLLMRequest(config, preset, retryMessages, regexes, meta, { ...requestOptions, onReasoning: undefined }), preset);
+        const retryRaw = stripPresetTexts(await sendLLMRequest(config, preset, retryMessages, regexes, meta, { ...requestOptions, usageReason: "offline_summary_retry", onReasoning: undefined }), preset);
         const retried = parseOfflineResponse(retryRaw, summaryTag);
         if (retried.summary.trim()) {
             parsed = { ...parsed, summary: retried.summary.trim() };
@@ -2351,6 +2403,8 @@ async function generateNativeChatCompletion(
                         followUpCount: options?.followUpCount,
                         debugSessionId: session.id,
                         signal: options?.signal,
+                        privateMemory: options?.privateMemory,
+                        usageReason: round > 0 ? "tool_continuation" : "chat",
                     },
                     {
                         onDelta: (text) => callbacks?.onStreamDelta?.(text),
@@ -2374,6 +2428,8 @@ async function generateNativeChatCompletion(
                         followUpCount: options?.followUpCount,
                         debugSessionId: session.id,
                         signal: options?.signal,
+                        privateMemory: options?.privateMemory,
+                        usageReason: round > 0 ? "tool_continuation" : "chat",
                     },
                 );
             }
@@ -2483,7 +2539,7 @@ async function generateNativeChatCompletion(
                             style: "native",
                             resultMarker,
                             imageMarker,
-                            request: buildProviderRequest(config, preset, snapshotMessages),
+                            request: buildProviderRequest(config, preset, withoutXinchaoLayers(snapshotMessages)),
                             session,
                             character,
                             userName: userIdentity?.name,
@@ -2677,6 +2733,21 @@ async function registerShortcutContinuation(
     return true;
 }
 
+/** Explicit manual action: one call to this conversation's selected API/model. */
+export async function runImmediateConsolidation(session: ChatSession, signal?: AbortSignal): Promise<void> {
+    if (session.isGroup) { await (await import('./group-chat-engine')).runImmediateGroupConsolidation(session, signal); return; }
+    if (loadMemoryConfig().memorySource !== 'shared') throw new ChatEngineError('请先选择共享记忆来源。');
+    const slot: { current?: ConsolidationRun } = {};
+    const built = await buildChatPromptMessages(session, loadChatMessages(session.id), { privateMemorySlot: slot });
+    if (!built.consolidationProjection) throw new ChatEngineError('共享整理尚未就绪，未调用模型。');
+    const run = await beginConsolidation(built.consolidationProjection, built.config, built.preset, built.llmMessages, signal, true);
+    if (!run?.job) { notifyConsolidation('没有可立即整理的新内容；未调用模型。'); return; }
+    try {
+        await sendLLMRequest(built.config, built.preset, built.llmMessages, [], undefined, { appId: 'chat', debugSessionId: session.id, signal, privateMemory: run, usageReason: 'manual_memory', skipOutputRegex: true });
+        if (!signal?.aborted) await run.finish();
+    } finally { await run.close(); }
+}
+
 export async function generateChatCompletion(
     session: ChatSession,
     history: ChatMessage[],
@@ -2685,6 +2756,7 @@ export async function generateChatCompletion(
 ): Promise<ChatCompletionResult> {
     // 发送兜底（离线推送）：生成期间在服务端挂一张带心跳租约的保险单，
     // 本地完成即撤销；App 被杀则心跳停跳，服务端接管生成并推送。
+    const privateMemorySlot: { current?: ConsolidationRun } = {};
     const bailoutRef: ReplyBailoutRef = {
         current: null,
         closed: false,
@@ -2694,11 +2766,17 @@ export async function generateChatCompletion(
         shortcutCancelled: false,
     };
     try {
-        return await generateChatCompletionCore(session, history, options, callbacks, bailoutRef);
+        const result = await generateChatCompletionCore(session, history, { ...options, privateMemorySlot }, callbacks, bailoutRef);
+        if (!options?.signal?.aborted) {
+            try { await privateMemorySlot.current?.finish(); }
+            catch (error) { notifyConsolidation(error instanceof Error ? error.message : "整理保存未确认，待处理进度已保留。"); }
+        }
+        return result;
     } catch (err) {
         if (options?.signal?.aborted) bailoutRef.shortcutCancelled = true;
         throw err;
     } finally {
+        await privateMemorySlot.current?.close();
         bailoutRef.closed = true;
         bailoutRef.current?.settle();
         for (const handle of bailoutRef.shortcutHandles) {
@@ -2715,12 +2793,24 @@ async function generateChatCompletionCore(
     callbacks: ChatCompletionCallbacks | undefined,
     bailoutRef: ReplyBailoutRef,
 ): Promise<ChatCompletionResult> {
-    const { llmMessages, character, config, preset, regexes, userIdentity, toolsEnabled } = await buildChatPromptMessages(session, history, options);
+    const { llmMessages, character, config, preset, regexes, userIdentity, toolsEnabled, consolidationProjection } = await buildChatPromptMessages(session, history, options);
+    if (consolidationProjection) {
+        try {
+            const run = await beginConsolidation(consolidationProjection, config, preset, llmMessages, options?.signal);
+            if (run) { options = { ...options, privateMemory: run }; if (options.privateMemorySlot) options.privateMemorySlot.current = run; }
+        } catch (error) { notifyConsolidation(error instanceof Error ? error.message : "共享整理暂不可用，进度已保留。"); }
+    }
+    const usesCodexGateway = toolsEnabled && getEnabledTools(options?.appId ?? "chat").some(tool => tool.source === "codex_gateway");
+    if (usesCodexGateway && !nativeToolProtocolForConfig(config)) {
+        throw new ChatEngineError("Codex 只读工具需要所选 API 开启原生工具调用；当前协议未兼容，未降级为文本动作。");
+    }
     const requestAppTags = mergeAppTags(options?.appTags, options?.promptProfile?.appTags, options?.appId ?? "chat");
 
     // 追问有自己的排期时兜底（followup:key），这里只为普通回复生成挂单。
     // 不 await：挂单失败或慢都不拖累本地生成；生成先结束则通过 closed 标记补撤销。
-    if (!session.isGroup && (options?.appId ?? "chat") === "chat" && !(requestAppTags ?? []).includes("followup")) {
+    // Existing cloud bailout cannot run this private executor. Keep this turn
+    // in the actual tool loop instead of silently sending a tool-less snapshot.
+    if (!options?.privateMemory && !usesCodexGateway && !session.isGroup && (options?.appId ?? "chat") === "chat" && !(requestAppTags ?? []).includes("followup")) {
         // 云端兜底可能在另一台机器上生成并经真实微信发送。把本轮最后一条
         // 用户输入/系统指令作为因果锚点带过去，避免回复拉回本地后因手机与
         // 云服务器存在亚秒级时钟偏差，被按 createdAt 重排到触发消息前面。
@@ -2766,6 +2856,35 @@ async function generateChatCompletionCore(
         }).catch(() => undefined);
     }
 
+    // Only explicit user turns in the locally selected private chat. Never in
+    // previews, group/offline/background tasks, work/private spaces or bailout snapshots.
+    const lastUserTurn = history[history.length - 1];
+    if (!session.isGroup && (options?.appId ?? "chat") === "chat"
+        && lastUserTurn?.role === "user" && lastUserTurn.sessionId === session.id
+        && !options?.followUpCount && !options?.timedWakeIntent && !options?.timedWakeElapsedMinutes
+        && !options?.ephemeralSystemNote && !options?.periodCareContext
+        && !(requestAppTags ?? []).some(tag => ["followup", "offline", "life", "schedule", "timed_wake", "autonomous"].includes(tag))) {
+        const tide = await prepareXinchaoChatLayer(session.id, character.id, options?.signal);
+        if (tide.warning) { try { callbacks?.onToolNotice?.(tide.warning); } catch { /* optional notice cannot stop chat */ } }
+        if (tide.content) {
+            insertConsolidationLayer(llmMessages, { role: "system", content: tide.content });
+            try {
+                let definitions: LlmToolDefinition[] | undefined;
+                if (toolsEnabled && nativeToolProtocolForConfig(config)) {
+                    const enabled = getEnabledTools(options?.appId ?? "chat");
+                    const latest = loadChatSessions().find(item => item.id === session.id);
+                    definitions = buildNativeChatTools(enabled, normalizeNativeExpandedToolSourceIds(latest?.nativeExpandedToolSourceIds || session.nativeExpandedToolSourceIds, enabled), { characterName: character.name, userName: userIdentity?.name ?? "用户" }).definitions;
+                }
+                guardConsolidationBudget(buildProviderRequest(config, preset, toLlmRequestMessages(llmMessages), { tools: definitions }), config);
+            } catch {
+                const clean = withoutXinchaoLayers(llmMessages); llmMessages.splice(0, llmMessages.length, ...clean);
+                const warning = "本轮窗口未知或不足，未加入心潮状态，聊天照常继续。";
+                noteXinchaoChatStatus(warning);
+                try { callbacks?.onToolNotice?.(warning); } catch { /* optional notice cannot stop chat */ }
+            }
+        }
+    }
+
     if (toolsEnabled && nativeToolProtocolForConfig(config) && getEnabledTools(options?.appId ?? "chat").length > 0) {
         return generateNativeChatCompletion({
             session,
@@ -2805,6 +2924,8 @@ async function generateChatCompletionCore(
                     followUpCount: options?.followUpCount,
                     debugSessionId: session.id,
                     signal: options?.signal,
+                    privateMemory: options?.privateMemory,
+                        usageReason: round > 0 ? "tool_continuation" : "chat",
                 }, {
                     onDelta: (text) => callbacks?.onStreamDelta?.(text),
                     // 流式下 onReasoningDelta 是单段增量：累积后再喂 onReasoning（保持整段请求语义）
@@ -2819,6 +2940,8 @@ async function generateChatCompletionCore(
                     followUpCount: options?.followUpCount,
                     debugSessionId: session.id,
                     signal: options?.signal,
+                    privateMemory: options?.privateMemory,
+                        usageReason: round > 0 ? "tool_continuation" : "chat",
                     // 预设开启「线上标签解析」时不透传原生思维链（改由下方标签提取）
                     onReasoning: onlineThinking.enabled ? undefined : callbacks?.onReasoning,
                 });
@@ -2959,7 +3082,7 @@ async function generateChatCompletionCore(
                             style: "text",
                             resultMarker,
                             imageMarker,
-                            request: buildProviderRequest(config, preset, toLlmRequestMessages(snapshotMessages)),
+                            request: buildProviderRequest(config, preset, toLlmRequestMessages(withoutXinchaoLayers(snapshotMessages))),
                             session,
                             character,
                             userName: userIdentity?.name,
@@ -3035,6 +3158,8 @@ async function generateChatCompletionCore(
                             followUpCount: options?.followUpCount,
                             debugSessionId: session.id,
                             signal: options?.signal,
+                        privateMemory: options?.privateMemory,
+                        usageReason: "tool_continuation",
                         }, {
                             onDelta: (text) => callbacks?.onStreamDelta?.(text),
                             // 流式下 onReasoningDelta 是单段增量：累积后再喂 onReasoning（保持整段请求语义）。
@@ -3049,6 +3174,8 @@ async function generateChatCompletionCore(
                             followUpCount: options?.followUpCount,
                             debugSessionId: session.id,
                             signal: options?.signal,
+                        privateMemory: options?.privateMemory,
+                        usageReason: "tool_continuation",
                             onReasoning: onlineThinking.enabled ? undefined : callbacks?.onReasoning,
                         });
                     }

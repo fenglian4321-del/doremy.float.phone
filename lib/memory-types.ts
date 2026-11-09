@@ -17,6 +17,13 @@ export type MemoryEntry = {
 };
 
 export type MemoryConfig = {
+    /** Explicit authoritative source; shared mode never falls back to local facts. */
+    memorySource?: "local" | "shared";
+    sharedRecallMode?: "ombre" | "latent";
+    /** 本机长期/核心记忆自动注入；不影响短期历史与手动检索。 */
+    automaticRecallEnabled?: boolean;
+    /** 暂停程序写入；记忆面板中的手工新增与编辑仍可保存。 */
+    automaticWritesPaused?: boolean;
     autoSummarizeEnabled: boolean;          // whether auto-summarization runs after N events
     autoBuildCoreEnabled: boolean;          // whether core memories rebuild after long-term summarization
     vectorRecallEnabled: boolean;           // whether vector embedding recall is used for memory retrieval
@@ -146,6 +153,10 @@ export const DEFAULT_CORE_MEMORY_PROMPT = `你是一个核心记忆整理助手�
 核心记忆总结：`;
 
 export const DEFAULT_MEMORY_CONFIG: MemoryConfig = {
+    memorySource: "local",
+    sharedRecallMode: "ombre",
+    automaticRecallEnabled: true,
+    automaticWritesPaused: false,
     autoSummarizeEnabled: true,
     autoBuildCoreEnabled: true,
     vectorRecallEnabled: true,

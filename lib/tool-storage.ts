@@ -14,6 +14,7 @@ import {
     LIFE_INVITATION_CAPABILITY_ID,
     LIFE_FOLLOW_CAPABILITY_ID,
     LIFE_SCHEDULE_CAPABILITY_ID,
+    MEMORY_WRITE_CAPABILITY_ID,
 } from "./internal-capability-storage";
 import { loadCustomAppToolsForContext, type RegisteredCustomAppExtension } from "./custom-app-sdk-registry";
 import { LIFE_TOOL_DEFINITIONS } from "./life/life-tools";
@@ -26,6 +27,7 @@ import {
 } from "./builtin-phone-workflows";
 import { MacroEngine, postProcessTrim } from "./macro-engine";
 import { kvGet, kvSet, registerKvMigration } from "./kv-db";
+import { loadMemoryConfig } from "./memory-storage";
 
 const REST_TOOLS_KEY = "ai_phone_rest_tools_v1";
 const REST_TOOL_PACKAGES_KEY = "ai_phone_rest_tool_packages_v1";
@@ -355,7 +357,7 @@ export type EnabledTool = {
     description: string;
     parameterSchema: string;
     usageGuide?: string;
-    source: "rest" | "rest_package" | "composite" | "composite_package" | "mcp" | "mcp_server" | "internal" | "custom_app" | "custom_app_package" | "life";
+    source: "rest" | "rest_package" | "composite" | "composite_package" | "mcp" | "mcp_server" | "internal" | "custom_app" | "custom_app_package" | "life" | "codex_gateway";
     sourceId: string;       // RestToolConfig.id or McpServerConfig.id
     customAppId?: string;
     customAppName?: string;
@@ -367,6 +369,8 @@ export type EnabledTool = {
 };
 
 export function getEnabledTools(appId?: string): EnabledTool[] {
+    // Codex's two heart-read prototype tools are diagnostic only. Ordinary
+    // Float built-ins and memory use the controlled direct dispatcher.
     const tools: EnabledTool[] = [];
 
     const restTools = loadRestTools();
@@ -442,6 +446,7 @@ export function getEnabledTools(appId?: string): EnabledTool[] {
     }
 
     for (const capability of getEnabledInternalCapabilities(appId)) {
+        if (loadMemoryConfig().memorySource === "shared" && capability.id === MEMORY_WRITE_CAPABILITY_ID) continue;
         const tool = getInternalCapabilityToolDefinition(capability);
         if (!tool) continue;
         tools.push({
@@ -518,6 +523,8 @@ export function getEnabledTools(appId?: string): EnabledTool[] {
 export function findEnabledToolForSchema(name: string, appId?: string, macroContext?: ToolNameMacroContext): EnabledTool | undefined {
     const enabled = getEnabledTools(appId);
     const matches = (tool: EnabledTool) => toolNameMatches(tool.name, name, macroContext);
+    const gateway = enabled.find(tool => tool.source === "codex_gateway" && matches(tool));
+    if (gateway) return gateway;
     // Match the runtime dispatcher priority: life-prefixed calls, internal, REST,
     // composite, MCP, then custom apps. This prevents a duplicate name from exposing
     // one tool's schema while executeSingleToolCall dispatches to another tool.

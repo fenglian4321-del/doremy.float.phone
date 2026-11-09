@@ -655,6 +655,7 @@ export async function buildWeixinCloudRuntimeSnapshot(
     .filter((item): item is RegexConfig => Boolean(item));
 
   const memoryConfig = loadMemoryConfig();
+  if (memoryConfig.memorySource === "shared") throw new Error("微信云端助手尚未接入共享记忆服务；已取消同步，避免上传另一份可写记忆副本。");
   const memories = await loadMemoryEntries(character.id);
   const chatAppSettings = loadChatAppSettings();
   const promptContext = await buildWeixinCloudPromptContext({

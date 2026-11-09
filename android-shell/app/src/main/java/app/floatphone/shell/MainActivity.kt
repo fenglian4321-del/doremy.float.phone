@@ -175,6 +175,14 @@ class MainActivity : AppCompatActivity() {
 
     /** 设备动作桥：让网页（进而让角色）在真实手机上做一件小事（边界说明见 DeviceActionBridge）。 */
     private val deviceAction by lazy { DeviceActionBridge(this) }
+    private val scopedFilesDelegate = lazy { ScopedFilesBridge(this, shellOriginRule().orEmpty()) { isTrustedShellPage() } }
+    private val scopedFiles by scopedFilesDelegate
+    private val pendingScopedPicker = java.util.concurrent.atomic.AtomicReference<String?>(null)
+    private val scopedDirectoryLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+        val id = pendingScopedPicker.getAndSet(null) ?: return@registerForActivityResult
+        val accepted = result.resultCode == android.app.Activity.RESULT_OK && isTrustedShellPage()
+        scopedFiles.finishPicker(id, if (accepted) result.data?.data else null, if (accepted) result.data?.flags ?: 0 else 0)
+    }
 
     /** 日历桥：让角色看见用户的真实日程，也能把纪念日写进系统日历（边界说明见 CalendarBridge）。 */
     private val calendar by lazy { CalendarBridge(this) }
@@ -1504,6 +1512,7 @@ private fun deleteCachedSharedVideoInternal(cacheId: String): Boolean {
             runCatching { webView.destroy() }
         }
         runCatching { sharedVideoExecutor.shutdownNow() }
+        if (scopedFilesDelegate.isInitialized()) runCatching { scopedFiles.close() }
         super.onDestroy()
     }
 
@@ -1722,6 +1731,39 @@ private fun deleteCachedSharedVideoInternal(cacheId: String): Boolean {
         @JavascriptInterface
         fun getNativeRealityBridgeLog(): String =
             NativeRealityBridge.recentLog(this@MainActivity)
+
+        @JavascriptInterface
+        fun getScopedFilesCapabilities(): String = scopedFiles.capabilities()
+
+        @JavascriptInterface
+        fun requestScopedDirectory(scope: String, requestId: String): String = scopedFiles.beginPicker(scope, requestId) {
+            if (!pendingScopedPicker.compareAndSet(null, requestId)) throw IllegalArgumentException("busy")
+            runOnUiThread {
+                if (!isTrustedShellPage() || isFinishing || isDestroyed) {
+                    pendingScopedPicker.compareAndSet(requestId, null)
+                    scopedFiles.finishPicker(requestId, null, 0)
+                } else try {
+                    scopedDirectoryLauncher.launch(Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).apply {
+                        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION or Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION or Intent.FLAG_GRANT_PREFIX_URI_PERMISSION)
+                    })
+                } catch (_: Throwable) {
+                    pendingScopedPicker.compareAndSet(requestId, null)
+                    scopedFiles.finishPicker(requestId, null, 0)
+                }
+            }
+        }
+
+        @JavascriptInterface
+        fun submitScopedFiles(json: String): String = scopedFiles.submit(json)
+
+        @JavascriptInterface
+        fun getScopedFilesResult(scope: String, requestId: String): String = scopedFiles.result(scope, requestId)
+
+        @JavascriptInterface
+        fun verifyScopedFiles(scope: String, requestId: String): String = scopedFiles.verify(scope, requestId)
+
+        @JavascriptInterface
+        fun cancelScopedFiles(scope: String, requestId: String): String = scopedFiles.cancel(scope, requestId)
 
         /** 原生无障碍服务是否支持独立后台停留计时（供网页避免重复触发）。 */
         @JavascriptInterface

@@ -41,6 +41,7 @@ import { MascotFloat } from "@/components/mascot/mascot-float";
 import { PerceptionBootstrap } from "@/components/perception/perception-bootstrap";
 import { MascotPreviewHost } from "@/components/mascot/mascot-preview-host";
 import { useMusicControlsOptional } from "@/lib/music-context";
+import { XinchaoApp } from "@/components/xinchao/xinchao-app";
 import { PhoneResourcesApp, type ResourceSubPage } from "@/components/phone-resources-app";
 import { CheckPhoneApp } from "@/components/checkphone/checkphone-app";
 import { ShoppingApp } from "@/components/shopping/shopping-app";
@@ -4468,6 +4469,10 @@ html,body{margin:0;padding:0;width:100%;height:100%;background:#121110;color:rgb
 
     if (activeApp === "story") {
       return <StoryApp onClose={() => setActiveApp(null)} />;
+    }
+
+    if (activeApp === "xinchao") {
+      return <XinchaoApp onClose={() => setActiveApp(null)} />;
     }
 
     if (activeApp === "life") {

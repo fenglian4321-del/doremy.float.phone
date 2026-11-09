@@ -93,7 +93,13 @@ export function ApiSettings() {
     }, [addConfig, setSubpageRightAction]);
 
     const updateConfig = (id: string, updates: Partial<ApiConfig>) => {
-        persist(configs.map(c => c.id === id ? { ...c, ...updates } : c));
+        persist(configs.map(c => {
+            if (c.id !== id) return c;
+            const modelChanged = (updates.defaultModel !== undefined && updates.defaultModel !== c.defaultModel)
+                || (updates.provider !== undefined && updates.provider !== c.provider)
+                || (updates.baseUrl !== undefined && updates.baseUrl !== c.baseUrl);
+            return { ...c, ...(modelChanged ? { contextWindowTokens: undefined } : {}), ...updates };
+        }));
     };
 
     const removeConfig = (id: string) => {
@@ -386,6 +392,11 @@ export function ApiSettings() {
                                             </div>
                                         </div>
 
+                                        <div className="flex flex-col gap-1">
+                                            <label className="menu-desc ml-1">模型上下文窗口（token，可留空）</label>
+                                            <Input type="number" min={1024} max={2000000} value={config.contextWindowTokens ?? ''} placeholder="填写当前模型实际支持的窗口" onChange={event => { const value = Number(event.target.value); updateConfig(config.id, { contextWindowTokens: Number.isSafeInteger(value) && value >= 1024 && value <= 2000000 ? value : undefined }); }} />
+                                            <p className="menu-desc">用于共享整理的输入与回复预留检查。未填写时保留待处理进度；估算不等于供应商实际用量。</p>
+                                        </div>
                                         <div className="flex gap-3 mt-1">
                                             <button
                                                 onClick={() => fetchModels(config)}

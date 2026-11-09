@@ -1,0 +1,10 @@
+import assert from 'node:assert/strict';
+import { parseOrbisMemoryExport } from '../lib/orbis-memory-import.ts';
+const note = { id:'source-1',assistantId:'synthetic-assistant',body:'\n虚构的完整原文\n',summary:'虚构摘要',state:'conditional',previousState:'static',tags:['原标签'],keywords:['原关键词'],important:true,minIntervalTurns:2,createdAt:1700000000000,updatedAt:1700000001000,revision:3,deleted:false };
+const payload = { schema:'orbis_memory_export_v1',assistantId:'synthetic-assistant',notes:[note,{...note,id:'source-deleted',deleted:true},{...note,id:'source-paused',state:'paused'}],revisions:[{...note,body:'历史版本绝不能作为当前事实导入',revision:1}] };
+const parsed = parseOrbisMemoryExport(JSON.stringify(payload));
+assert.equal(parsed.entries.length,3); assert.equal(parsed.ignoredRevisions,1); assert.equal(parsed.entries[0].note.body,note.body); assert.equal(parsed.entries[0].error,undefined); assert.ok(parsed.entries[1].error); assert.equal(parsed.entries[2].error,undefined);
+assert.ok(!JSON.stringify(parsed.entries).includes('历史版本绝不能'));
+for(const bad of [{...payload,schema:'full_backup',conversations:[{messages:['PRIVATE_CHAT']}]},{...payload,notes:[note,note]},{...payload,revisions:null}])assert.throws(()=>parseOrbisMemoryExport(JSON.stringify(bad)));
+for(const bad of [{...note,body:'x'.repeat(12001)},{...note,summary:'x'.repeat(4000)},{...note,assistantId:'foreign-assistant'},{...note,messages:['must not import chat fields']},{...note,createdAt:'yesterday'}])assert.ok(parseOrbisMemoryExport(JSON.stringify({...payload,notes:[bad]})).entries[0].error);
+console.log('Verified Orbis memory-export schema: current notes only, exact original text retained in preview, history excluded, ownership/state/capacity checks and chat-backup rejection passed.');

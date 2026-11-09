@@ -4,6 +4,7 @@
 import type { ApiConfig } from "./settings-types";
 import type { MemoryEntry, MemorySearchResult } from "./memory-types";
 import { determineBaseUrl, buildRequestHeaders } from "./api-helpers";
+import { fetchWithUsage } from "./usage-fetch";
 
 // ── Provider → Embedding Model Mapping ──
 
@@ -60,14 +61,14 @@ export async function generateEmbedding(
     const headers = buildRequestHeaders(apiConfig, baseUrl);
 
     try {
-        const res = await fetch(url, {
+        const res = await fetchWithUsage(url, {
             method: "POST",
             headers,
             body: JSON.stringify({
                 model: embeddingModel,
                 input: text,
             }),
-        });
+        }, { provider: apiConfig.provider, model: embeddingModel, configId: apiConfig.id, source: "embedding", reason: "embedding" });
         if (!res.ok) {
             return fail(`API 错误 ${res.status}: ${await res.text()}`);
         }

@@ -5,6 +5,7 @@ import type { MemoryEntry, MemoryConfig } from "./memory-types";
 import { DEFAULT_MEMORY_CONFIG } from "./memory-types";
 import { kvGet, kvSet, kvRemove, registerKvMigration, registerDynamicPrefix } from "./kv-db";
 import { openIndexedDbAtLeast } from "./idb-open";
+import { loadSharedMemoryEntries, saveSharedMemoryEntry, type MemorySaveResult } from "./shared-memory-client";
 
 // ── Long-term memory DB (unchanged from v1) ──
 
@@ -54,22 +55,32 @@ function runRequest<T>(req: IDBRequest<T>): Promise<T> {
 
 // ── Long-term Entry CRUD ──
 
-export async function saveMemoryEntry(entry: MemoryEntry): Promise<void> {
+export async function saveMemoryEntry(entry: MemoryEntry, options?: { userInitiated?: boolean }): Promise<MemorySaveResult> {
+    const initial = loadMemoryConfig();
+    if (!options?.userInitiated && initial.automaticWritesPaused) throw new Error("程序写入记忆已暂停");
+    if (initial.memorySource === "shared") return saveSharedMemoryEntry(entry, options?.userInitiated);
     const db = await openDb();
-    if (!db) return;
+    if (!db) throw new Error("记忆数据库不可用，未保存");
     try {
+        // Recheck after async work: an in-flight model/tool must obey a newly paused setting.
+        if (!options?.userInitiated && loadMemoryConfig().automaticWritesPaused) {
+            throw new Error("程序写入记忆已暂停；可在记忆设置中恢复，或在面板中手工编辑");
+        }
+        if (loadMemoryConfig().memorySource === "shared") return await saveSharedMemoryEntry(entry, options?.userInitiated);
         const tx = db.transaction(STORE_NAME, "readwrite");
         tx.objectStore(STORE_NAME).put(entry);
         await new Promise<void>((res, rej) => {
             tx.oncomplete = () => res();
             tx.onerror = () => rej(tx.error);
         });
+        return { state: "saved" };
     } finally {
         db.close();
     }
 }
 
 export async function loadMemoryEntries(characterId: string): Promise<MemoryEntry[]> {
+    if (loadMemoryConfig().memorySource === "shared") return loadSharedMemoryEntries(characterId);
     const db = await openDb();
     if (!db) return [];
     try {
@@ -100,6 +111,7 @@ export async function loadMemoryEntriesByType(
 }
 
 export async function deleteMemoryEntry(id: string): Promise<void> {
+    if (loadMemoryConfig().memorySource === "shared" || id.startsWith("ombre:")) throw new Error("共享记忆删除尚未接入；未删除正式记忆，请先使用可视化编辑纠错。");
     const db = await openDb();
     if (!db) return;
     try {
@@ -116,6 +128,7 @@ export async function deleteMemoryEntry(id: string): Promise<void> {
 
 export async function deleteMemoryEntries(ids: string[]): Promise<void> {
     if (ids.length === 0) return;
+    if (loadMemoryConfig().memorySource === "shared" || ids.some(id => id.startsWith("ombre:"))) throw new Error("共享记忆批量删除尚未接入，未删除正式记忆。");
     const db = await openDb();
     if (!db) return;
     try {
@@ -355,6 +368,7 @@ export function getEventCounter(characterId: string): number {
 }
 
 export function incrementEventCounter(characterId: string): number {
+    if (loadMemoryConfig().memorySource === "shared") return getEventCounter(characterId);
     const next = getEventCounter(characterId) + 1;
     if (typeof window !== "undefined") {
         kvSet(EVENT_COUNTER_PREFIX + characterId, String(next));

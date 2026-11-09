@@ -1,3 +1,5 @@
+import { redactXinchaoLayers } from "./xinchao-ephemeral";
+import type { TokenUsage } from "./token-usage";
 // lib/api-log-store.ts
 // 底层模型调用日志存储（独立模块，避免 chat-engine ↔ api-helpers 循环依赖）。
 // 聊天引擎（整段/流式/原生工具）与 simpleLLMCall（记忆总结、朋友圈、日历等
@@ -12,7 +14,7 @@ export type DebugInfo = {
     messages: { role: string; content: string; marker?: string }[];
     rawResponse: string;
     timestamp: string;
-    usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number };
+    usage?: TokenUsage;
     /** 模型思维链（reasoning/CoT）原文，独立于回复内容存储，避免被清洗吞掉 */
     reasoning?: string;
     /** 调用来源：chat=聊天引擎、background=simpleLLMCall 后台功能（具体功能名看 characterName 标签）、qa=工坊答疑引擎 */
@@ -65,7 +67,7 @@ function truncateForLog(text: string, limit: number): string {
 }
 
 function truncateMessagesForLog(messages: DebugInfo["messages"]): DebugInfo["messages"] {
-    const truncated = messages.map(message => ({
+    const truncated = redactXinchaoLayers(messages).map(message => ({
         ...message,
         content: truncateForLog(message.content, MAX_LOG_MESSAGE_CHARS),
     }));

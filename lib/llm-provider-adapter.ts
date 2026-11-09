@@ -1,3 +1,5 @@
+import type { TokenUsage } from "./token-usage";
+import { normalizeTokenUsage } from "./token-usage";
 import type { LLMContentPart, LLMMessage } from "./llm-prompt-assembler";
 import type { ApiConfig, PresetConfig } from "./settings-types";
 import {
@@ -21,6 +23,8 @@ export type LlmToolDefinition = {
 
 export type LlmToolCall = {
     id: string;
+    /** Present only when the native provider actually supplied a call ID. */
+    providerCallId?: string;
     name: string;
     args: Record<string, unknown>;
     /** Gemini 2.5+ multi-turn function calling 需要回传这个签名才能保持上下文一致性 */
@@ -48,7 +52,7 @@ export type LlmParsedResponse = {
     reasoning?: string;
     openRouterReasoningDetails?: unknown[];
     toolCalls: LlmToolCall[];
-    usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number };
+    usage?: TokenUsage;
     raw: unknown;
 };
 
@@ -61,6 +65,7 @@ export type LlmStreamDelta = {
 export type LlmToolCallDelta = {
     index: number;
     id?: string;
+    providerCallId?: string;
     name?: string;
     argsText?: string;
     args?: Record<string, unknown>;
@@ -280,11 +285,13 @@ export function buildProviderDebugMessages(
     return debugMessagesFromRequest(request);
 }
 
-export function parseProviderResponse(providerKind: LlmProviderKind, data: unknown): LlmParsedResponse {
+export function parseProviderResponse(providerKind: LlmProviderKind, data: unknown, options?: { preservePrivateDecision?: boolean }): LlmParsedResponse {
     const result = providerKind === "anthropic" ? parseAnthropicResponse(data)
         : providerKind === "gemini" ? parseGeminiResponse(data)
         : parseOpenAICompatibleResponse(data);
-    result.content = stripHallucinatedTimestamps(result.content);
+    // Evidence must be validated against the original source before any
+    // timestamp scrubber can rewrite quoted text inside a private decision.
+    if (!options?.preservePrivateDecision) result.content = stripHallucinatedTimestamps(result.content);
     return result;
 }
 
@@ -687,9 +694,10 @@ function buildGeminiRequest(
 
 function compactGeminiContents(messages: LlmRequestMessage[]): Array<{ role: "user" | "model" | "tool"; parts: unknown[] }> {
     const compacted: Array<{ role: "user" | "model" | "tool"; parts: unknown[] }> = [];
+    const providerIds = new Set(messages.flatMap(m => m.role === "assistant" ? (m.toolCalls || []).flatMap(c => c.providerCallId ? [c.providerCallId] : []) : []));
     for (const message of messages) {
         const role = message.role === "assistant" ? "model" : message.role === "tool" ? "tool" : "user";
-        const parts = geminiParts(message);
+        const parts = geminiParts(message, providerIds);
         const last = compacted[compacted.length - 1];
         if (last && last.role === role) last.parts.push(...parts);
         else compacted.push({ role, parts });
@@ -697,11 +705,12 @@ function compactGeminiContents(messages: LlmRequestMessage[]): Array<{ role: "us
     return compacted;
 }
 
-function geminiParts(message: LlmRequestMessage): unknown[] {
+function geminiParts(message: LlmRequestMessage, providerIds: Set<string> = new Set()): unknown[] {
     if (message.role === "tool") {
         return [{
             functionResponse: {
                 name: message.name,
+                ...(providerIds.has(message.toolCallId) ? { id: message.toolCallId } : {}),
                 response: { result: message.content },
             },
         }];
@@ -716,11 +725,11 @@ function geminiParts(message: LlmRequestMessage): unknown[] {
             ...(message.reasoning ? [{ thought: true, text: message.reasoning }] : []),
             ...(message.content ? [{ text: message.content }] : []),
             ...message.toolCalls.map((call) => {
-                const hasArgs = call.args && typeof call.args === "object" && Object.keys(call.args).length > 0;
                 const part: Record<string, unknown> = {
                     functionCall: {
                         name: call.name,
-                        args: hasArgs ? call.args : { noop: "1" },
+                        ...(call.providerCallId ? { id: call.providerCallId } : {}),
+                        args: call.args,
                     },
                 };
                 if (call.thoughtSignature) part.thoughtSignature = call.thoughtSignature;
@@ -750,7 +759,7 @@ function parseOpenAICompatibleResponse(data: unknown): LlmParsedResponse {
         reasoning: String(message?.reasoning_content ?? message?.reasoning ?? message?.thinking ?? ""),
         openRouterReasoningDetails,
         toolCalls,
-        usage: d.usage,
+        usage: normalizeTokenUsage(data),
         raw: data,
     };
 }
@@ -805,11 +814,7 @@ function parseAnthropicResponse(data: unknown): LlmParsedResponse {
         content,
         reasoning,
         toolCalls,
-        usage: d.usage ? {
-            prompt_tokens: d.usage.input_tokens,
-            completion_tokens: d.usage.output_tokens,
-            total_tokens: (d.usage.input_tokens ?? 0) + (d.usage.output_tokens ?? 0),
-        } : undefined,
+        usage: normalizeTokenUsage(data),
         raw: data,
     };
 }
@@ -821,10 +826,11 @@ function parseGeminiResponse(data: unknown): LlmParsedResponse {
     let reasoning = "";
     const toolCalls: LlmToolCall[] = [];
     for (const part of parts) {
-        const item = part as { text?: string; thought?: boolean; thoughtSignature?: string; functionCall?: { name?: string; args?: unknown } };
+        const item = part as { text?: string; thought?: boolean; thoughtSignature?: string; functionCall?: { id?: string; name?: string; args?: unknown } };
         if (item.functionCall) {
             const call: LlmToolCall = {
-                id: `gemini_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+                id: item.functionCall.id || `gemini_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+                ...(item.functionCall.id ? { providerCallId: item.functionCall.id } : {}),
                 name: String(item.functionCall.name ?? ""),
                 args: objectArgs(item.functionCall.args),
             };
@@ -840,11 +846,7 @@ function parseGeminiResponse(data: unknown): LlmParsedResponse {
         content,
         reasoning,
         toolCalls,
-        usage: d.usageMetadata ? {
-            prompt_tokens: d.usageMetadata.promptTokenCount,
-            completion_tokens: d.usageMetadata.candidatesTokenCount,
-            total_tokens: d.usageMetadata.totalTokenCount,
-        } : undefined,
+        usage: normalizeTokenUsage(data),
         raw: data,
     };
 }
@@ -925,11 +927,12 @@ function parseGeminiStreamDelta(data: unknown): LlmStreamDelta {
     let reasoning = "";
     const toolCallDeltas: LlmToolCallDelta[] = [];
     for (const part of parts) {
-        const item = part as { text?: string; thought?: boolean; thoughtSignature?: string; type?: string; functionCall?: { name?: string; args?: unknown } };
+        const item = part as { text?: string; thought?: boolean; thoughtSignature?: string; type?: string; functionCall?: { id?: string; name?: string; args?: unknown } };
         if (item.functionCall) {
             const delta: LlmToolCallDelta = {
                 index: toolCallDeltas.length,
-                id: `gemini_${Date.now()}_${toolCallDeltas.length}`,
+                id: item.functionCall.id || `gemini_${Date.now()}_${toolCallDeltas.length}`,
+                ...(item.functionCall.id ? { providerCallId: item.functionCall.id } : {}),
                 name: String(item.functionCall.name ?? ""),
                 args: objectArgs(item.functionCall.args),
             };

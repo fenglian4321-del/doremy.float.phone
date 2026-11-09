@@ -149,6 +149,8 @@ export type ApiConfig = {
     apiKey: string;
     baseUrl?: string;
     defaultModel: string;
+    /** User-verified model window; missing means unknown, never infer a large window. */
+    contextWindowTokens?: number;
     enableNativeTools?: boolean;
     enableImageRecognition: boolean;
     enableImageGeneration: boolean;

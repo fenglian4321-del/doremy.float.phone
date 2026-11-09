@@ -221,7 +221,7 @@ async function runActions(rule: BridgeRule, item: BridgeItem, text: string): Pro
   }
   if (actions.memory?.characterId) {
     const now = new Date().toISOString();
-    await saveMemoryEntry({
+    const saved = await saveMemoryEntry({
       id: `bridge_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
       characterId: actions.memory.characterId,
       sourceApp: "chat",
@@ -231,7 +231,7 @@ async function runActions(rule: BridgeRule, item: BridgeItem, text: string): Pro
       createdAt: now,
       updatedAt: now,
     });
-    done.push("写入记忆");
+    done.push(saved.state === "pending" ? "记忆等待可选审核" : "写入记忆");
   }
   if (actions.timeline?.characterId) {
     appendCustomAppTimelineEntry(BRIDGE_SOURCE, {
