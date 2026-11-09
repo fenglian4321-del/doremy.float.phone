@@ -36,8 +36,36 @@ export async function createWorkbenchFixture() {
         for(const call of calls)if(call.name==='写入合成便签'){assert.ok(approvals.length);floatWrites.push(call.args);if(floatMode==='lost')throw Error('SYNTHETIC_PRIVATE_UPSTREAM_ERROR');}
         return calls.map(call=>({name:call.name,success:true,data:JSON.stringify({body:'SYNTHETIC_FLOAT_PRIVATE_DATA',apiKey:'sk-SYNTHETIC_SECRET_1234567890',echo:call.args})}));
     }};
+    const shizukuState={ready:false,status:'authorized',identity:'shell',uid:2000,epoch:1},shizukuGrants=new Map(),shizukuResults=new Map(),shizukuWire=[],shizukuEffects=[];
+    let shizukuMode='';
+    const shizukuWindow={location:{origin:'https://float.fixture'},AndroidShell:{
+        getShizukuStatus:()=>JSON.stringify({protocol:'float-shizuku/v1',state:'complete',...shizukuState}),
+        shizukuControl:encoded=>{
+            const b=JSON.parse(encoded),scopeId=key(b.scope||{mode:'work',workspaceId:'control'}),reply=extra=>JSON.stringify({protocol:'float-shizuku/v1',state:'complete',...extra});
+            const g=shizukuGrants.get(b.grantId);
+            if(['grant_status','activate','action'].includes(b.operation)&&(!shizukuState.ready||!g||g.scopeId!==scopeId||g.epoch!==shizukuState.epoch))return reply({state:'failed',code:'grant_expired'});
+            if(b.operation==='grant_status')return reply({grant:g});
+            if(b.operation==='activate'){if(g.taskDigest!==b.taskDigest)throw Error('task mismatch');g.run={runId:b.runId,claim:b.claim};return reply({grant:g});}
+            if(b.operation==='revoke'){shizukuGrants.delete(b.grantId);return reply({});}
+            if(b.operation==='cancel'){const r=shizukuResults.get(b.requestId);if(r)r.cancelled=true;return reply({state:'failed',code:'cancelled'});}
+            if(['result','receipt'].includes(b.operation)){const r=shizukuResults.get(b.requestId);if(!r||r.scopeId!==scopeId)return reply({state:'failed',code:'invalid_scope'});return reply(r.reply);}
+            if(b.operation==='action'){
+                assert.ok(g.run);assert.ok(g.allowLaunch||b.action!=='launch_app');shizukuWire.push(b);
+                const record={scopeId,cancelled:false,reply:{state:'pending',requestId:b.requestId}};shizukuResults.set(b.requestId,record);
+                void ownerRequest('/api/shared-memory/'+(b.scope.mode==='work'?'workspaces':'private-space'),{method:'POST',headers:{'Content-Type':'application/json','x-float-space-external-tools':'v1'},body:JSON.stringify({operation:'phone_lease',workspaceId:b.scope.workspaceId,...g.run})}).then(async response=>{
+                    assert.equal(response.status,200);const lease=await response.json();assert.equal(lease.externalMode,'assistant');assert.equal(lease.taskDigest,g.taskDigest);
+                    if(shizukuMode==='death'){shizukuState.ready=false;shizukuState.status='disconnected';shizukuState.epoch++;}
+                    if(!record.cancelled&&shizukuState.ready){shizukuEffects.push(b);record.reply={state:'complete',requestId:b.requestId,receipt:{requestId:b.requestId,operation:b.action,state:'complete'},data:{location:'android_shizuku',operation:b.action,uid:shizukuState.uid,identity:shizukuState.identity,untrustedData:true,synthetic:'PUBLIC_APP_METADATA'}};}
+                    else record.reply={state:'failed',code:'action_uncertain',requestId:b.requestId};
+                }).catch(()=>{record.reply={state:'failed',code:'task_inactive',requestId:b.requestId};});
+                return reply({state:'pending',requestId:b.requestId});
+            }
+            throw Error('Unexpected Shizuku operation '+b.operation);
+        }
+    }};
+    const shizukuModule=load('lib/shizuku-tools.ts',{'./kv-db':db},false,{window:shizukuWindow});
     const memoryTools=load('lib/workspace-memory-tools.ts');
-    const assistant=load('lib/workspace-assistant-session.ts',{'./kv-db':db,'./tool-storage':storage,'./tool-prompt':{formatToolSchema:tool=>tool.usageGuide||tool.parameterSchema},'./phone-file-tools':phoneModule,'./phone-device-tools':deviceModule,'./scoped-device-ui':{deviceUiAvailability:()=>({available:true,composedTasks:composed})},'./managed-mcp-session':managed,'./workspace-client':client,'./chat-storage':{loadChatSessions:()=>[],resolveSessionCharacterId:()=>''},'./character-storage':{loadCharacters:()=>[]},'./workspace-memory-tools':memoryTools,'./tool-executor':execute});
+    const assistant=load('lib/workspace-assistant-session.ts',{'./kv-db':db,'./tool-storage':storage,'./tool-prompt':{formatToolSchema:tool=>tool.usageGuide||tool.parameterSchema},'./phone-file-tools':phoneModule,'./phone-device-tools':deviceModule,'./shizuku-tools':shizukuModule,'./scoped-device-ui':{deviceUiAvailability:()=>({available:true,composedTasks:composed})},'./managed-mcp-session':managed,'./workspace-client':client,'./chat-storage':{loadChatSessions:()=>[],resolveSessionCharacterId:()=>''},'./character-storage':{loadCharacters:()=>[]},'./workspace-memory-tools':memoryTools,'./tool-executor':execute});
     const rawMcp=f.internalNetwork;
     const ownerRequest=async(path,init={})=>{
         const request=new Request('https://float.fixture'+path,{...init,headers:{...init.headers,Origin:'https://float.fixture','x-float-memory-access-token':config.accessToken}});
@@ -67,6 +95,9 @@ export async function createWorkbenchFixture() {
     };
     return {f,load,db,config,client,managed,assistant,memoryTools,model,modelWire,backendWire,nativeWire,floatWrites,approvals,ownerRequest,storage,
         setModel(fn){modelHandler=fn;},setFloatMode(value){floatMode=value;},setStorageFailure(value){failStorage=value;},setCatalogChanged(value){catalogChanged=value;},setComposed(value){composed=value;},
+        shizuku:shizukuModule,shizukuState,shizukuWindow,shizukuWire,shizukuEffects,
+        setShizukuMode(value){shizukuMode=value;},
+        enableShizuku(room,allowLaunch=true){shizukuState.ready=true;shizukuState.status='ready';const g={id:webcrypto.randomUUID(),label:'Synthetic selected app',allowLaunch,taskDigest:createHash('sha256').update('合成组合任务').digest('hex'),expires:Date.now()+600000,epoch:shizukuState.epoch,scopeId:key(room.scope)};shizukuGrants.set(g.id,g);shizukuModule.enableShizukuTools(room.scope,g);return g;},
         async create(kind='work'){const response=await client.spaceCall(kind,'create',{title:'新对话',clientKey:webcrypto.randomUUID()});return {workspace:response.workspace,scope:{mode:kind,workspaceId:response.workspace.id}};},
         async enableNative(room){phones.set(key(room.scope),makeNative(room.scope,'file'));devices.set(key(room.scope),makeNative(room.scope,'device'));const control=await f.client.managedMcpControl(room.scope,'catalog');await f.client.managedMcpControl(room.scope,'bind',{version:control.binding.version,enabled:true,services:[{id:'fixture',revision:control.services[0].revision,tools:['lookup']}]});await managed.enableManagedMcpSession(room.scope,'fixture');},
         nativeStop(scope){devices.get(key(scope))?.stop();},

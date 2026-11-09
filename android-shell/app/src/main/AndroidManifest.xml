@@ -2,6 +2,7 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
 
+    <uses-permission android:name="moe.shizuku.manager.permission.API_V23" />
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
@@ -27,6 +28,7 @@
     <!-- Health Connect：Android 13 及以下要单独装那个 App，这里声明它是为了
          在没装时能正确地「探测不到」而不是崩掉。Android 14+ 它已并入系统。 -->
     <queries>
+        <package android:name="moe.shizuku.privileged.api" />
         <package android:name="com.google.android.apps.healthdata" />
         <!-- 闹钟与倒计时：Android 11+ 有包可见性限制，不在 queries 里声明这两个
              意图，就「看不到」系统时钟 App，startActivity 会抛
@@ -100,6 +102,12 @@
         android:supportsRtl="true"
         android:networkSecurityConfig="@xml/network_security_config"
         android:theme="@style/Theme.FloatShell">
+
+        <provider android:name="rikka.shizuku.ShizukuProvider"
+            android:authorities="${applicationId}.shizuku" android:multiprocess="false"
+            android:enabled="true" android:exported="true"
+            android:permission="android.permission.INTERACT_ACROSS_USERS_FULL" />
+        <meta-data android:name="moe.shizuku.client.V3_SUPPORT" android:value="true" />
 
         <activity
             android:name=".MainActivity"

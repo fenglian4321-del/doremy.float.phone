@@ -29,6 +29,7 @@
     "weixin:build-dist": "node scripts/build-weixin-assistant-dist.mjs",
     "push:build-dist": "node scripts/build-personal-push-dist.mjs",
     "build:glass-icons": "node scripts/build-glass-icons.mjs",
+    "test:shizuku": "node scripts/check-shizuku.mjs --compile-policy && node scripts/test-shizuku.mjs",
     "test:phone-device": "node scripts/check-device-ui.mjs --compile-policy && node scripts/test-phone-device-tools.mjs",
     "test:private-runtime-safety": "node scripts/test-device-local-backup.mjs && node scripts/test-diary-timer-control.mjs",
     "test:usage-cost": "node scripts/test-usage-cost.mjs"

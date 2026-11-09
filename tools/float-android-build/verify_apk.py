@@ -55,6 +55,24 @@ def main():
     tree = capture([str(sdk / "aapt2.exe"), "dump", "xmltree", str(apk), "--file", "AndroidManifest.xml"], "apk-manifest-tree.log")
     if not re.search(r"android:allowBackup[^\n=]*=(?:false\b|\(type 0x12\)0x0\b)", tree):
         raise RuntimeError("APK automatic backup is not demonstrably disabled")
+    shizuku_provider = False
+    provider_lines = tree.splitlines()
+    for i, line in enumerate(provider_lines):
+        element = re.match(r"^(\s*)E: provider ", line)
+        if not element:
+            continue
+        indent = len(element.group(1)); block = []
+        for following in provider_lines[i + 1:]:
+            if following.strip() and len(following) - len(following.lstrip()) <= indent:
+                break
+            block.append(following)
+        attributes = "\n".join(block)
+        if re.search(r'android:name[^\n=]*="rikka.shizuku.ShizukuProvider"', attributes):
+            if not re.search(r'android:permission[^\n=]*="android.permission.INTERACT_ACROSS_USERS_FULL"', attributes):
+                raise RuntimeError("Shizuku provider lacks required access protection")
+            shizuku_provider = True
+    if not shizuku_provider:
+        raise RuntimeError("Official Shizuku provider is absent from compiled manifest")
     # Badging appends platform-implied permissions (legacy WRITE implies READ).
     # Compare actual XML declarations, rather than treating those as new nodes.
     permissions = []
@@ -100,12 +118,12 @@ def main():
         if any(name.lower().endswith((".keystore", ".jks", ".p12", ".pfx", ".key")) for name in names):
             raise RuntimeError("Unexpected private key artifact in APK")
         dex = b"\n".join(bundle.read(name) for name in names if re.fullmatch(r"classes[0-9]*\.dex", name))
-        required = [site, "ScopedFilesBridge", "getScopedFilesCapabilities", "requestScopedDirectory", "submitScopedFiles", "getScopedFilesResult", "verifyScopedFiles", "cancelScopedFiles", "DeviceUiBridge", "composedTasks", "invalidateDocument", "getDeviceUiCapabilities", "requestDeviceUiGrant", "activateDeviceUiGrant", "submitDeviceUi", "getDeviceUiResult", "getDeviceUiReceipt", "cancelDeviceUi", "revokeDeviceUiGrant", "XinchaoOfflineWake", "getXinchaoOfflineWakeStatus", "setXinchaoOfflineWakeEnabled"]
+        required = [site, "ScopedFilesBridge", "getScopedFilesCapabilities", "requestScopedDirectory", "submitScopedFiles", "getScopedFilesResult", "verifyScopedFiles", "cancelScopedFiles", "DeviceUiBridge", "composedTasks", "ShizukuBridge", "ShizukuExecutor", "IShizukuExecutor", "getShizukuStatus", "shizukuControl", "float-shizuku/v1", "invalidateDocument", "getDeviceUiCapabilities", "requestDeviceUiGrant", "activateDeviceUiGrant", "submitDeviceUi", "getDeviceUiResult", "getDeviceUiReceipt", "cancelDeviceUi", "revokeDeviceUiGrant", "XinchaoOfflineWake", "getXinchaoOfflineWakeStatus", "setXinchaoOfflineWakeEnabled"]
         if not all(value.encode("ascii") in dex for value in required):
             raise RuntimeError("Site or scoped native bridge missing from compiled DEX")
         if bundle.testzip() is not None:
             raise RuntimeError("Corrupt APK archive")
-    result = {"format": "float-local-test-apk/v1", "stage": args.stage, "applicationId": package.group(1), "versionCode": int(package.group(2)), "versionName": package.group(3), "site": site, "compileSdk": 36, "minSdk": 26, "targetSdk": 34, "debuggable": True, "automaticBackup": False, "bytes": apk.stat().st_size, "sha256": hash_file(apk), "signature": {"verified": True, "schemeV2": True, "certificateSha256": cert.group(1).lower(), "existingInstallationCompatibility": "unknown"}, "permissions": permissions, "platformImpliedPermissions": implied, "compiledScopedBridge": True, "compiledDeviceUiBridge": True, "compiledComposedTasks": True, "compiledXinchaoOfflineWake": True, "deviceValidated": False, "installed": False, "aiPhoneFilesDefaultOff": True}
+    result = {"format": "float-local-test-apk/v1", "stage": args.stage, "applicationId": package.group(1), "versionCode": int(package.group(2)), "versionName": package.group(3), "site": site, "compileSdk": 36, "minSdk": 26, "targetSdk": 34, "debuggable": True, "automaticBackup": False, "bytes": apk.stat().st_size, "sha256": hash_file(apk), "signature": {"verified": True, "schemeV2": True, "certificateSha256": cert.group(1).lower(), "existingInstallationCompatibility": "unknown"}, "permissions": permissions, "platformImpliedPermissions": implied, "compiledScopedBridge": True, "compiledDeviceUiBridge": True, "compiledComposedTasks": True, "compiledShizukuUserService": True, "shizukuProviderProtected": True, "compiledXinchaoOfflineWake": True, "deviceValidated": False, "installed": False, "aiPhoneFilesDefaultOff": True}
     output.mkdir(parents=True, exist_ok=True)
     name = "float-" + args.stage + "-" + package.group(3) + "-debug.apk"
     with apk.open("rb") as source_apk, (output / name).open("xb") as target:

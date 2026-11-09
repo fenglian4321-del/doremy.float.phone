@@ -179,6 +179,13 @@ class MainActivity : AppCompatActivity() {
     private val scopedFiles by scopedFilesDelegate
     private val deviceUiDelegate = lazy { DeviceUiBridge(this, shellOriginRule().orEmpty()) { isTrustedShellPage() } }
     private val deviceUi by deviceUiDelegate
+    private val shizukuDelegate = lazy { ShizukuBridge(this, shellOriginRule().orEmpty()) { isTrustedShellPage() } }
+    private val shizuku by shizukuDelegate
+    private val pendingShizukuPicker = java.util.concurrent.atomic.AtomicReference<String?>(null)
+    private val shizukuLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+        val id = pendingShizukuPicker.getAndSet(null) ?: return@registerForActivityResult
+        shizuku.finishGrant(id, if (result.resultCode == android.app.Activity.RESULT_OK && isTrustedShellPage()) result.data?.component else null)
+    }
     private val pendingDeviceUiPicker = java.util.concurrent.atomic.AtomicReference<String?>(null)
     private val deviceUiLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
         val id = pendingDeviceUiPicker.getAndSet(null) ?: return@registerForActivityResult
@@ -1154,6 +1161,7 @@ private fun deleteCachedSharedVideoInternal(cacheId: String): Boolean {
         webView.webViewClient = object : WebViewClient() {
             override fun onPageStarted(view: WebView, url: String?, favicon: Bitmap?) {
                 if (deviceUiDelegate.isInitialized()) deviceUi.invalidateDocument()
+                if (shizukuDelegate.isInitialized()) shizuku.invalidateDocument()
                 trustedShellUrl = url ?: trustedShellUrl
                 if (!secureBridgeDocumentStartInstalled && isTrustedShellPage()) {
                     view.evaluateJavascript(secureBridgeBootstrapScript(), null)
@@ -1523,6 +1531,7 @@ private fun deleteCachedSharedVideoInternal(cacheId: String): Boolean {
         runCatching { sharedVideoExecutor.shutdownNow() }
         if (scopedFilesDelegate.isInitialized()) runCatching { scopedFiles.close() }
         if (deviceUiDelegate.isInitialized()) runCatching { deviceUi.close() }
+        if (shizukuDelegate.isInitialized()) runCatching { shizuku.close() }
         super.onDestroy()
     }
 
@@ -1744,6 +1753,16 @@ private fun deleteCachedSharedVideoInternal(cacheId: String): Boolean {
 
         @JavascriptInterface
         fun getScopedFilesCapabilities(): String = scopedFiles.capabilities()
+
+        @JavascriptInterface
+        fun getShizukuStatus(): String = shizuku.status()
+
+        @JavascriptInterface
+        fun shizukuControl(json: String): String = shizuku.control(json) { requestId ->
+            if (!pendingShizukuPicker.compareAndSet(null, requestId)) throw IllegalStateException("picker_busy")
+            try { shizukuLauncher.launch(Intent(Intent.ACTION_PICK_ACTIVITY).putExtra(Intent.EXTRA_INTENT, Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER))) }
+            catch (error: Throwable) { pendingShizukuPicker.compareAndSet(requestId, null); shizuku.finishGrant(requestId, null); throw error }
+        }
 
         @JavascriptInterface
         fun getDeviceUiCapabilities(): String = deviceUi.capabilities()
