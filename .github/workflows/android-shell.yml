@@ -9,10 +9,10 @@ on:
         type: string
   push:
     branches: [main, feature/life-system, feature/life-system-mainline]
-    paths: ["android-shell/**", ".github/workflows/android-shell.yml", "scripts/check-android-permissions.mjs", "scripts/check-scoped-files.mjs", "scripts/check-device-ui.mjs", "scripts/check-shizuku.mjs", "!android-shell/**/*.md"]
+    paths: ["android-shell/**", ".github/workflows/android-shell.yml", "scripts/check-android-permissions.mjs", "scripts/check-scoped-files.mjs", "scripts/check-device-ui.mjs", "scripts/check-shizuku.mjs", "scripts/check-http-auth.mjs", "!android-shell/**/*.md"]
   pull_request:
     branches: [main]
-    paths: ["android-shell/**", ".github/workflows/android-shell.yml", "scripts/check-android-permissions.mjs", "scripts/check-scoped-files.mjs", "scripts/check-device-ui.mjs", "scripts/check-shizuku.mjs", "!android-shell/**/*.md"]
+    paths: ["android-shell/**", ".github/workflows/android-shell.yml", "scripts/check-android-permissions.mjs", "scripts/check-scoped-files.mjs", "scripts/check-device-ui.mjs", "scripts/check-shizuku.mjs", "scripts/check-http-auth.mjs", "!android-shell/**/*.md"]
 
 permissions:
   contents: read
@@ -52,6 +52,9 @@ jobs:
 
       - name: Validate Shizuku UserService contract and fixed command policy
         run: node scripts/check-shizuku.mjs --compile-policy
+
+      - name: Validate trusted site HTTP authentication policy
+        run: node scripts/check-http-auth.mjs --compile-policy
 
       - name: Decode keystore (optional)
         if: ${{ env.SHELL_KEYSTORE_BASE64 != '' }}

@@ -152,6 +152,7 @@ class MainActivity : AppCompatActivity() {
         var bytes: Long = 0L,
     )
     private val chunkedFileWrites = ConcurrentHashMap<String, ChunkedFileWrite>()
+    private var siteHttpAuth: SiteHttpAuth? = null
     private var recoveryOverlay: View? = null
     private var recoveryBoot = false
     private var filePathCallback: ValueCallback<Array<Uri>>? = null
@@ -1158,8 +1159,16 @@ private fun deleteCachedSharedVideoInternal(cacheId: String): Boolean {
         // WebView 只能在主线程访问，投递时由 ShellBus 统一 post 到主线程。
         ShellBus.webView = webView
 
+        siteHttpAuth = if (SITE_URL.startsWith("https://")) SiteHttpAuth(this, SITE_URL, {
+            recoveryOverlay?.let { rootContainer.removeView(it) }; recoveryOverlay = null
+            // Waiting for explicit login is not a native crash/startup loop.
+            getSharedPreferences("float_startup_diagnostics", Context.MODE_PRIVATE).edit().putBoolean("launch_in_progress", false).apply()
+        }, {
+            showNativeRecoveryScreen("站点登录未完成", "请重新加载后，在原生登录框手动输入本站账号和密码。取消或认证失败不会清除应用数据，也不会自动重试密码。")
+        }) else null
         webView.webViewClient = object : WebViewClient() {
             override fun onPageStarted(view: WebView, url: String?, favicon: Bitmap?) {
+                siteHttpAuth?.started(url)
                 if (deviceUiDelegate.isInitialized()) deviceUi.invalidateDocument()
                 if (shizukuDelegate.isInitialized()) shizuku.invalidateDocument()
                 trustedShellUrl = url ?: trustedShellUrl
@@ -1177,7 +1186,7 @@ private fun deleteCachedSharedVideoInternal(cacheId: String): Boolean {
 
             override fun onPageFinished(view: WebView, url: String?) {
                 super.onPageFinished(view, url)
-                if (isTrustedShellOrigin(url)) {
+                if (isTrustedShellOrigin(url) && siteHttpAuth?.finished(url) != false) {
                     trustedShellUrl = url
                     getSharedPreferences("float_startup_diagnostics", Context.MODE_PRIVATE)
                         .edit()
@@ -1187,9 +1196,21 @@ private fun deleteCachedSharedVideoInternal(cacheId: String): Boolean {
                 }
             }
 
+            override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest): android.webkit.WebResourceResponse? {
+                siteHttpAuth?.resource(request.url.toString(), request.isForMainFrame)
+                return super.shouldInterceptRequest(view, request)
+            }
+
+            override fun onReceivedHttpAuthRequest(view: WebView, handler: android.webkit.HttpAuthHandler, host: String, realm: String) {
+                if (view !== webView || siteHttpAuth == null) { handler.cancel(); return }
+                siteHttpAuth?.challenge(view, handler, host)
+            }
+
             override fun onReceivedError(view: WebView, request: WebResourceRequest, error: android.webkit.WebResourceError) {
                 super.onReceivedError(view, request, error)
                 if (request.isForMainFrame) {
+                    if ((error.errorCode == WebViewClient.ERROR_AUTHENTICATION || error.description.toString().contains("ERR_HTTP_RESPONSE_CODE_FAILURE")) && siteHttpAuth?.authenticationFailure(request.url.toString()) == true) return
+                    siteHttpAuth?.navigationRequested()
                     val description = "网页主文档加载失败：${error.description}（错误码 ${error.errorCode}）"
                     showNativeRecoveryScreen("网页没有加载成功", description)
                 }
@@ -1198,11 +1219,14 @@ private fun deleteCachedSharedVideoInternal(cacheId: String): Boolean {
             override fun onReceivedHttpError(view: WebView, request: WebResourceRequest, response: android.webkit.WebResourceResponse) {
                 super.onReceivedHttpError(view, request, response)
                 if (request.isForMainFrame && response.statusCode >= 400) {
+                    if (response.statusCode == 401 && siteHttpAuth?.authenticationFailure(request.url.toString()) == true) return
+                    siteHttpAuth?.navigationRequested()
                     showNativeRecoveryScreen("站点返回错误", "HTTP ${response.statusCode} ${response.reasonPhrase ?: ""}\n地址：${request.url.host ?: "未知"}")
                 }
             }
 
             override fun onRenderProcessGone(view: WebView, detail: android.webkit.RenderProcessGoneDetail): Boolean {
+                siteHttpAuth?.close()
                 val reason = if (detail.didCrash()) "WebView 渲染进程崩溃" else "WebView 渲染进程被系统回收"
                 val detailText = "$reason；系统优先级：${detail.rendererPriorityAtExit()}"
                 recordWebViewCrash(reason, detailText)
@@ -1215,11 +1239,12 @@ private fun deleteCachedSharedVideoInternal(cacheId: String): Boolean {
                 // Subframe navigations must never replace the trusted top-level URL snapshot.
                 // Otherwise a cross-origin video iframe would revoke the bridge for the real app page.
                 if (!request.isForMainFrame) return false
+                siteHttpAuth?.navigationRequested()
                 trustedShellUrl = url.toString()
                 val scheme = url.scheme ?: return false
                 // 站内导航留在壳里；顶层 http(s) 外链和自定义协议交给系统
                 if (scheme == "http" || scheme == "https") {
-                    if (url.host == Uri.parse(SITE_URL).host) return false
+                    if (isTrustedShellOrigin(url.toString()) && url.userInfo == null) return false
                     return runCatching {
                         startActivity(Intent(Intent.ACTION_VIEW, url)); true
                     }.getOrDefault(true)
@@ -1520,6 +1545,7 @@ private fun deleteCachedSharedVideoInternal(cacheId: String): Boolean {
     }
 
     override fun onDestroy() {
+        siteHttpAuth?.close(); siteHttpAuth = null
         // Recovery mode intentionally returns before creating a WebView. Keep its
         // lifecycle safe: touching a lateinit WebView here would crash the recovery UI.
         if (::webView.isInitialized) {
