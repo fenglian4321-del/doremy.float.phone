@@ -29,4 +29,18 @@ if(process.argv.includes('--compile-policy')){
  const compiled=spawnSync(path.join(home,'bin','javac'+exe),['-encoding','UTF-8','-d',out,path.join(root,dir+'SiteHttpAuthPolicy.java'),path.join(root,'android-shell/policy-test/SiteHttpAuthPolicyTest.java')],{encoding:'utf8',windowsHide:true});assert.equal(compiled.status,0,compiled.stderr);
  const result=spawnSync(path.join(home,'bin','java'+exe),['-cp',out,'SiteHttpAuthPolicyTest'],{encoding:'utf8',windowsHide:true});assert.equal(result.status,0,result.stderr);process.stdout.write(result.stdout);
 }
-console.log('Primary WebView auth/recovery lifecycle and credential non-persistence wiring passed; device dialog/network timing still requires user verification.');
+const saved=read(dir+'SiteCredentialStore.kt');
+assert.match(saved,/AndroidKeyStore/);assert.match(saved,/SiteCredentialCodec.encrypt/);assert.match(saved,/setRandomizedEncryptionRequired\(true\)/);
+assert.ok(!/getEncoded\(|evaluateJavascript|@JavascriptInterface|Log\.[a-z]\(/.test(saved));
+assert.match(auth,/candidate.epoch == epoch && candidate.remember && !candidate.automatic/);
+assert.match(auth,/if \(complete\)[\s\S]{0,500}saved.save/);
+assert.match(auth,/automaticEpoch != policy.epoch\(\) && previous == null/);
+assert.match(auth,/if \(previous.automatic\) saved.reject\(previous.realm\)/);
+assert.match(main,/challenge\(view, handler, host, realm\)/);
+assert.match(main,/fun getRememberedSiteLoginStatus\(\)/);assert.match(main,/fun forgetRememberedSiteLogin\(\)/);
+if(process.argv.includes('--compile-policy')) {
+ const home=process.env.FLOAT_TEST_JAVA_HOME||process.env.JAVA_HOME,work=path.resolve(process.env.FLOAT_TEST_WORK_DIR||path.join(root,'work')),out=mkdtempSync(path.join(work,'saved-login-')),exe=process.platform==='win32'?'.exe':'';
+ const compiled=spawnSync(path.join(home,'bin','javac'+exe),['-encoding','UTF-8','-d',out,path.join(root,dir+'SiteCredentialCodec.java'),path.join(root,'android-shell/policy-test/SiteCredentialCodecTest.java')],{encoding:'utf8',windowsHide:true});assert.equal(compiled.status,0,compiled.stderr);
+ const result=spawnSync(path.join(home,'bin','java'+exe),['-cp',out,'SiteCredentialCodecTest'],{encoding:'utf8',windowsHide:true});assert.equal(result.status,0,result.stderr);process.stdout.write(result.stdout);
+}
+console.log('Primary WebView auth fences, save-after-success, encrypted native remembering, one automatic attempt and manual fallback wiring passed; real Android restart/login remains unverified.');

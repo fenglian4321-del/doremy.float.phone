@@ -6,7 +6,7 @@ const PREFIXES = [
     'float_shizuku_profile_receipt_v1_', 'float_shizuku_receipt_v1_', 'float_shizuku_run_v1_',
     'float_phone_device_ui_v1_', 'float_phone_device_run_v1_',
     'float_managed_mcp_receipt_v1_', 'float_managed_mcp_run_v1_',
-    'float_xinchao_proactive', 'float_xinchao_feedback_',
+    'float_xinchao_inner_receipt_v1', 'float_xinchao_core_binding_v1', 'float_xinchao_proactive', 'float_xinchao_feedback_',
 ];
 export function isDeviceLocalExecutionKey(key: unknown): boolean {
     return typeof key === 'string' && PREFIXES.some(prefix => key.startsWith(prefix));

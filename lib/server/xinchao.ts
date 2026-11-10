@@ -97,8 +97,8 @@ export async function readXinchaoSnapshot(config: Config, signal?: AbortSignal, 
         || !/^[a-z_]{1,32}$/.test(state.consciousness) || !object(state.drives)
         || (state.lastSettledAt != null && !at(state.lastSettledAt))) return protocol();
     const projectedNow = projectNow(now);
-    // Neutral dimensions only. No body/intimacy activation and no inferred relationship labels.
-    const labels: Record<string, string> = { curiosity: '好奇', boredom: '闲暇', duty: '行动意愿', reflection: '自省', grieve: '低落', anger: '不满' };
+    // Full verified drive keys; display does not activate a simulation or infer a relationship.
+    const labels: Record<string, string> = { possess: '想她', monitor: '牵挂', share: '分享欲', libido: '情欲', favored: '偏爱', curiosity: '好奇', boredom: '闲暇', duty: '行动意愿', reflection: '自省', grieve: '低落', anger: '不满' };
     const currentDrives = state.drives;
     const drives = Object.entries(labels).flatMap(([key, label]) => {
         const value = currentDrives[key];

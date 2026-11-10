@@ -1,3 +1,5 @@
+import { INNER_TOOL_START, INNER_TOOL_END } from './xinchao-ephemeral';
+import { executeInnerTool } from './xinchao-inner-client';
 import { executePersistentShizuku, type ShizukuScope } from './shizuku-profile';
 import type {
     CompositeToolConfig,
@@ -26,7 +28,7 @@ import { executeCustomAppToolCall } from "./custom-app-tool-runtime";
 import { executeLifeToolCall } from "./life/life-tools";
 import { appendLifeTimelineEntry, loadVirtualLifeState, saveVirtualLifeState } from "./life/life-storage";
 import { characterWorkspace, agentComputerRequest, isAgentComputerConfigured } from "./agent-computer";
-import { SHIZUKU_CAPABILITY_ID, AGENT_COMPUTER_CAPABILITY_ID, CHECK_IN_REQUEST_CAPABILITY_ID, CALENDAR_MANAGEMENT_CAPABILITY_ID, DEVICE_ACTION_CAPABILITY_ID, LOCAL_DATA_LIBRARY_CAPABILITY_ID, MEMORY_WRITE_CAPABILITY_ID, MUSIC_CONTROL_CAPABILITY_ID, NOTE_WALL_CAPABILITY_ID, PHOTO_WALL_CAPABILITY_ID, PERCEPTION_READ_CAPABILITY_ID, PHONE_WIDGET_CAPABILITY_ID, REALITY_BRIDGE_CAPABILITY_ID, SEND_FILE_CAPABILITY_ID, SYSTEM_CALENDAR_CAPABILITY_ID, TIMED_WAKE_CAPABILITY_ID, TOOLBOX_MANAGEMENT_CAPABILITY_ID, getInternalCapability } from "./internal-capability-storage";
+import { XINCHAO_INNER_CAPABILITY_ID, SHIZUKU_CAPABILITY_ID, AGENT_COMPUTER_CAPABILITY_ID, CHECK_IN_REQUEST_CAPABILITY_ID, CALENDAR_MANAGEMENT_CAPABILITY_ID, DEVICE_ACTION_CAPABILITY_ID, LOCAL_DATA_LIBRARY_CAPABILITY_ID, MEMORY_WRITE_CAPABILITY_ID, MUSIC_CONTROL_CAPABILITY_ID, NOTE_WALL_CAPABILITY_ID, PHOTO_WALL_CAPABILITY_ID, PERCEPTION_READ_CAPABILITY_ID, PHONE_WIDGET_CAPABILITY_ID, REALITY_BRIDGE_CAPABILITY_ID, SEND_FILE_CAPABILITY_ID, SYSTEM_CALENDAR_CAPABILITY_ID, TIMED_WAKE_CAPABILITY_ID, TOOLBOX_MANAGEMENT_CAPABILITY_ID, getInternalCapability } from "./internal-capability-storage";
 import { createPhotoWallId, loadPhotoWallState, savePhotoWallState, type PhotoWallDoodle, type PhotoWallCreationRecord, type PhotoWallPhoto } from "./photo-wall-storage";
 import { generateImageFromConfiguredApi } from "./image-generation-service";
 import {
@@ -868,6 +870,7 @@ async function executeCompositeTool(
 }
 
 function normalizeInternalToolResult(result: ToolResult): ToolResult {
+    if (result.name === "心潮内室") return { ...result, continueConversation: true, persistToHistory: false };
     return {
         ...result,
         continueConversation: true,
@@ -876,6 +879,14 @@ function normalizeInternalToolResult(result: ToolResult): ToolResult {
 }
 
 async function executeInternalTool(call: ToolCall, context?: ToolExecutionContext): Promise<ToolResult | null> {
+    if (call.name === "心潮内室") {
+        try {
+            const c=getInternalCapability(XINCHAO_INNER_CAPABILITY_ID);
+            if(!c?.enabled||c.mode==="off"||context?.appId!=="chat"||context.sourceEngine!=="chat"||!context.characterId||!context.sessionId)throw new Error("仅本人绑定的生活私聊可使用心潮内室。");
+            const data=await executeInnerTool(context.characterId,context.sessionId,call.args,context.signal);
+            return {name:call.name,success:true,data:INNER_TOOL_START + JSON.stringify(data).replaceAll(INNER_TOOL_START,"［内室资料］").replaceAll(INNER_TOOL_END,"［内室结束］") + INNER_TOOL_END,continueConversation:true,persistToHistory:false,userNotice:"心潮内室工具已返回。"};
+        }catch(e){const error=e instanceof Error?e.message:"心潮工具未完成。";return {name:call.name,success:false,error,continueConversation:true,persistToHistory:false,userNotice:error};}
+    }
     if (call.name === "Shizuku手机助手") {
         try {
             const c = getInternalCapability(SHIZUKU_CAPABILITY_ID);

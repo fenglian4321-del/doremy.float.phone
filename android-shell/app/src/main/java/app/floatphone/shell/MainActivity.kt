@@ -422,6 +422,10 @@ class MainActivity : AppCompatActivity() {
                     .apply()
                 recreate()
             }
+            action("忘记本机保存的站点账号") {
+                val ok = siteHttpAuth?.forgetSaved() ?: SiteCredentialStore(this, SiteHttpAuthPolicy(SITE_URL).displayOrigin()).forget()
+                Toast.makeText(this, if (ok) "已删除保存登录；现有站点会话可能继续有效，下次认证需重新输入" else "未完成，请重试", Toast.LENGTH_LONG).show()
+            }
             action("在系统浏览器打开站点") {
                 runCatching { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(SITE_URL))) }
                     .onFailure { showNativeRecoveryScreen("无法打开浏览器", it.message ?: "系统未找到可用浏览器") }
@@ -1165,7 +1169,7 @@ private fun deleteCachedSharedVideoInternal(cacheId: String): Boolean {
             // Waiting for explicit login is not a native crash/startup loop.
             getSharedPreferences("float_startup_diagnostics", Context.MODE_PRIVATE).edit().putBoolean("launch_in_progress", false).apply()
         }, {
-            showNativeRecoveryScreen("站点登录未完成", "请重新加载后，在原生登录框手动输入本站账号和密码。取消或认证失败不会清除应用数据，也不会自动重试密码。")
+            showNativeRecoveryScreen("站点登录未完成", "请重新加载站点；有本机保存登录时会先尝试一次，失效后请手动输入。勾选记住登录后成功会加密保存在本机。不会循环重试密码或清除应用数据。")
         }) else null
         webView.webViewClient = object : WebViewClient() {
             override fun onPageStarted(view: WebView, url: String?, favicon: Bitmap?) {
@@ -1189,6 +1193,7 @@ private fun deleteCachedSharedVideoInternal(cacheId: String): Boolean {
                 super.onPageFinished(view, url)
                 if (isTrustedShellOrigin(url) && siteHttpAuth?.finished(url) != false) {
                     trustedShellUrl = url
+                    CookieManager.getInstance().flush()
                     getSharedPreferences("float_startup_diagnostics", Context.MODE_PRIVATE)
                         .edit()
                         .putBoolean("launch_in_progress", false)
@@ -1204,7 +1209,7 @@ private fun deleteCachedSharedVideoInternal(cacheId: String): Boolean {
 
             override fun onReceivedHttpAuthRequest(view: WebView, handler: android.webkit.HttpAuthHandler, host: String, realm: String) {
                 if (view !== webView || siteHttpAuth == null) { handler.cancel(); return }
-                siteHttpAuth?.challenge(view, handler, host)
+                siteHttpAuth?.challenge(view, handler, host, realm)
             }
 
             override fun onReceivedError(view: WebView, request: WebResourceRequest, error: android.webkit.WebResourceError) {
@@ -1789,6 +1794,20 @@ private fun deleteCachedSharedVideoInternal(cacheId: String): Boolean {
 
         @JavascriptInterface
         fun getScopedFilesCapabilities(): String = scopedFiles.capabilities()
+
+        @JavascriptInterface
+        fun getRememberedSiteLoginStatus(): String {
+            if (!isTrustedShellPage()) return "{\"supported\":false}"
+            return org.json.JSONObject().put("supported", true).put("saved", SiteCredentialStore(this@MainActivity, SiteHttpAuthPolicy(SITE_URL).displayOrigin()).hasSaved()).toString()
+        }
+
+        @JavascriptInterface
+        fun forgetRememberedSiteLogin(): Boolean {
+            if (!isTrustedShellPage()) return false
+            val result = java.util.concurrent.CompletableFuture<Boolean>()
+            runOnUiThread { result.complete(siteHttpAuth?.forgetSaved() ?: SiteCredentialStore(this@MainActivity, SiteHttpAuthPolicy(SITE_URL).displayOrigin()).forget()) }
+            return runCatching { result.get(2, java.util.concurrent.TimeUnit.SECONDS) }.getOrDefault(false)
+        }
 
         @JavascriptInterface
         fun getShizukuStatus(): String = shizuku.status()

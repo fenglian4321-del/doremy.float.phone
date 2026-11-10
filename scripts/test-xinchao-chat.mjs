@@ -22,8 +22,8 @@ function load(file, mocks = {}, extras = {}) {
 }
 const db = { kvGet: key => cache.get(key), kvSet: (key, value) => cache.set(key, value), kvRemove: key => cache.delete(key), registerKvMigration: noop };
 const ep = load('../lib/xinchao-ephemeral.ts');
-const chat = load('../lib/xinchao-chat.ts', { './kv-db': db, './xinchao-ephemeral': ep }, { BroadcastChannel: Channel });
-const otherCache = new Map(), other = load('../lib/xinchao-chat.ts', { './kv-db': { ...db, kvGet: key => otherCache.get(key), kvSet: (key, value) => otherCache.set(key, value) }, './xinchao-ephemeral': ep }, { BroadcastChannel: Channel });
+const chat = load('../lib/xinchao-chat.ts', { './kv-db': db, './xinchao-core': { fixedCoreMatches: async()=>true, innerPreferences:()=>({binding:null,bodyInChat:false}) }, './xinchao-ephemeral': ep }, { BroadcastChannel: Channel });
+const otherCache = new Map(), other = load('../lib/xinchao-chat.ts', { './kv-db': { ...db, kvGet: key => otherCache.get(key), kvSet: (key, value) => otherCache.set(key, value) }, './xinchao-core': { fixedCoreMatches: async()=>true, innerPreferences:()=>({binding:null,bodyInChat:false}) }, './xinchao-ephemeral': ep }, { BroadcastChannel: Channel });
 let nowCalls = 0;
 const settings = { enabled: true, sessionId: 'selected-chat', characterId: 'selected-actor' };
 const text = 'PRIVATE_SYNTHETIC_NOW';
@@ -62,12 +62,12 @@ const counter = load('../lib/token-counter.ts'), budget = load('../lib/consolida
 const protocol = load('../lib/consolidation-protocol.ts', { './token-counter': counter });
 const helper = load('../lib/api-helpers.ts');
 const adapter = load('../lib/llm-provider-adapter.ts', { './api-helpers': helper, './generation-parameters': { resolveEnabledGenerationParameters: () => new Set() } });
-const logs = load('../lib/api-log-store.ts', { './kv-db': db, './xinchao-ephemeral': ep });
+const logs = load('../lib/api-log-store.ts', { './kv-db': db, './xinchao-core': { fixedCoreMatches: async()=>true, innerPreferences:()=>({binding:null,bodyInChat:false}) }, './xinchao-ephemeral': ep });
 const debug = [];
 class Macro { expand(value) { return value; } }
 let modelCalls = 0, expectedIncluded = true;
 const engine = load('../lib/chat-engine.ts', {
-    './xinchao-chat': chat, './xinchao-ephemeral': ep, './api-log-store': logs, './debug-store': { setDebugPromptSnapshot: snapshot => debug.push(snapshot) },
+    './xinchao-chat': chat, './xinchao-core': { fixedCoreMatches: async()=>true, innerPreferences:()=>({binding:null,bodyInChat:false}) }, './xinchao-ephemeral': ep, './api-log-store': logs, './debug-store': { setDebugPromptSnapshot: snapshot => debug.push(snapshot) },
     './llm-provider-adapter': adapter, './consolidation-budget': budget, './consolidation-protocol': protocol,
     './macro-engine': { MacroEngine: Macro, postProcessTrim: value => value }, './sse-json': load('../lib/sse-json.ts'),
     './chat-plugin-hooks': { runChatPluginTransform: async (_event, payload) => payload, emitChatPluginEvent: noop },

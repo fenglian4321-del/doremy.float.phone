@@ -45,7 +45,7 @@ try{
  const files=await readdir(root);for(const file of files.filter(name=>name.endsWith('.json'))){const raw=await readFile(path.join(root,file),'utf8');for(const marker of ['PRIVATE_USER_BODY','SYNTHETIC_CHAT','SYNTHETIC_CHARACTER',env.DYNAMIC_MIND_TOKEN,env.FLOAT_XINCHAO_FEEDBACK_LEDGER_KEY])assert.ok(!raw.includes(marker));}
  // Real browser-side module, same owner route and synthetic HTTP service.
  const cache=new Map(),db={kvGet:key=>cache.get(key),kvSet:(key,value)=>cache.set(key,value),registerKvMigration:()=>{}};
- const client=load('lib/xinchao-feedback.ts',{'./kv-db':db});let apiCalls=0;
+ const client=load('lib/xinchao-feedback.ts',{'./xinchao-core':{fixedCoreMatches:async()=>true},'./kv-db':db});let apiCalls=0;
  network=async(url,init)=>{if(url==='/api/shared-memory/xinchao/feedback'){apiCalls++;return request(JSON.parse(init.body),{},init.signal);}assert.equal(new URL(url).origin,env.FLOAT_XINCHAO_URL);return fetch(url,init);};
  assert.equal(client.xinchaoFeedbackSettings().enabled,false);assert.equal(client.prepareXinchaoFeedback(turn()),undefined);assert.equal(apiCalls,0);
  assert.equal(await client.checkXinchaoFeedbackAvailable(),true);const chosen={enabled:true,sessionId:'SYNTHETIC_CHAT',characterId:'SYNTHETIC_CHARACTER'};client.setXinchaoFeedbackSettings(chosen);

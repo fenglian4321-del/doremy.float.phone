@@ -1,5 +1,6 @@
 "use client";
 
+import { RememberedSiteLogin } from './remembered-site-login';
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { AlertTriangle, CheckCircle2, Clipboard, Download, RefreshCw, ShieldCheck, Smartphone, Wifi, XCircle } from "lucide-react";
 import { getQaErrorEntries, type QaErrorEntry } from "@/lib/qa-error-log";
@@ -294,6 +295,7 @@ export function RuntimeDiagnostics({ onNotice }: { onNotice?: (message: string) 
   const warned = checks.filter(item => item.status === "warn").length;
 
   return <div style={{ display: "grid", gap: 14, padding: "4px 0 24px" }}>
+    <RememberedSiteLogin />
     <section style={{ border: "1px solid var(--border, rgba(128,128,128,.18))", borderRadius: 16, padding: 14 }}>
       <div style={{ fontWeight: 700, fontSize: 14 }}>WebView Console 警告与错误</div>
       <p style={{ fontSize: 12, opacity: .7, lineHeight: 1.6, margin: "7px 0 10px" }}>新版 Android 壳会在本机保留最近 200 条 warning/error，不自动上传。日志可能包含 URL 或错误上下文，分享前请检查。</p>

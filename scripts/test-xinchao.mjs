@@ -43,8 +43,8 @@ env.FLOAT_XINCHAO_URL = 'http://127.0.0.1:' + fixture.address().port;
 try {
     const config = adapter.readXinchaoConfig(env);
     const snapshot = await adapter.readXinchaoSnapshot(config);
-    assert.equal(snapshot.revision, 8); assert.equal(snapshot.now.revision, 9); assert.equal(snapshot.drives.length, 6);
-    assert.ok(!JSON.stringify(snapshot).includes('DO_NOT_PROJECT')); assert.ok(!JSON.stringify(snapshot).includes('libido'));
+    assert.equal(snapshot.revision, 8); assert.equal(snapshot.now.revision, 9); assert.equal(snapshot.drives.length, 7);
+    assert.ok(!JSON.stringify(snapshot).includes('DO_NOT_PROJECT')); assert.equal(snapshot.drives.find(d => d.key === 'libido').value, .8);
     assert.ok(!JSON.stringify(snapshot).includes(env.DYNAMIC_MIND_TOKEN));
     assert.deepEqual(calls.map(v => v.path).sort(), ['/health', '/v1/now', '/v1/state']); assert.ok(calls.every(v => v.method === 'GET'));
     for (const kind of ['version', 'auth', 'redirect', 'html', 'bad-state', 'bad-now']) {

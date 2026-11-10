@@ -1,0 +1,27 @@
+{
+  "repository": "tianyupaipai-cmd/xinchao-nian",
+  "commit": "453d5da50f3c7e26d5ba586714a08c507c94d44f",
+  "version": "4.3.0",
+  "blobs": {
+    "black-box.js": "b70c83646b0d314a9f8c926c327a49a5ba24e750",
+    "cabin-store.js": "5320bf5c26ae7059da42097c202b745d46401f6c",
+    "config.js": "eba96c14752562d369d2f0adf3b6e1dcf980adec",
+    "dashboard-projection.js": "9693c997036894e3cb5da26d1b9a4b422ba5affd",
+    "dimensions.js": "8f9fac74bc91eb916211e7bc4d8d6a5de3f13ee3",
+    "drive-pool.js": "520997e9d7976716bfabc9d4ba8900dac8d4dd6b",
+    "emotion.js": "33072a51747d98abb8116e4a922f6b9659dbfcad",
+    "engine.js": "09d10d35a4755fabf5ab2fa99bdac902af1d3734",
+    "mcp-protocol.js": "eba7f5b7f5a98b623c61cdc46084169f15da3301",
+    "personality-store.js": "8b2b304f5e53b396bf5532ca0ce876563372081a",
+    "pulse.js": "6b606eb061d9e81fe403c11499854281e6f6ea6f",
+    "README.md": "3f5bbfbd43532d222a8cd258242b231178635d27",
+    "server.js": "2abe7fa9d81407e84794290d23bacaf6a7027378",
+    "state-store.js": "68d7c22970abfea3a26116e93b359bd43a564f8c",
+    "thought-pool.js": "2e070b8d983b470248f94488bd940fa81879248c",
+    "transition-journal.js": "e9dd8cf3b911ac1be733736a925cd6c9f300b00c",
+    "model-client.js": "7e7835ba25102f1be07aba5d0b2436b572a98ee5",
+    "drive-prompts.js": "116b12da86c27249c5787a4a952d320914b9532b",
+    "context-envelope.js": "6fe8d2b3d7e1b1128e415a202074cf5b80c33a4c",
+    "version.js": "135e019c0b3d13462e6f5214b86f3f4f6cec73c3"
+  }
+}

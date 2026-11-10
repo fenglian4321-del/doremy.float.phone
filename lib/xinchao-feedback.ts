@@ -1,3 +1,4 @@
+import { fixedCoreMatches } from './xinchao-core';
 import { kvGet, kvSet, registerKvMigration } from './kv-db';
 type Settings = { enabled: boolean; sessionId: string; characterId: string; revision: string };
 export type XinchaoFeedbackSettings = Settings;
@@ -49,7 +50,7 @@ export function prepareXinchaoFeedback(turn: Turn, signal?: AbortSignal): (() =>
     const selected = xinchaoFeedbackSettings();
     if (!selected.enabled || selected.sessionId !== turn.sessionId || selected.characterId !== turn.characterId || !id(turn.messageId) || !Number.isFinite(Date.parse(turn.createdAt)) || signal?.aborted) return;
     return async () => {
-        if (!matches(selected) || signal?.aborted) return;
+        if (!matches(selected) || signal?.aborted || !await fixedCoreMatches(turn.characterId)) return;
         const previous = recent();
         if (previous.some(item => same(item, turn))) return;
         const controller = new AbortController(); pending.add(controller);

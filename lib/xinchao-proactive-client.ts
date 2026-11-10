@@ -1,3 +1,4 @@
+import { fixedCoreMatches } from './xinchao-core';
 import { kvGet, kvSet, registerKvMigration } from './kv-db';
 import { loadChatMessages, loadChatSessions, pushChatMessage, resolveSessionCharacterId } from './chat-storage';
 import { chatDb } from './chat-db';
@@ -94,6 +95,7 @@ export async function replyToXinchaoWake(deliveryId: string, automatic = false) 
         }
         if (received.replayed === true || typeof received.message !== 'string' || received.message.length > 4096 || received.sessionId !== session.id || received.characterId !== settings.characterId) throw new Error('原领取只返回状态或绑定不符，没有重做模型。');
         const verify = async () => {
+            if (!await fixedCoreMatches(settings.characterId)) throw new Error("固定核心已改变，主动轮停止；请核对绑定。");
             signal.throwIfAborted();
             const current = cachedXinchaoProactiveSettings();
             if (!turn.isCurrent() || !current.enabled || current.version !== settings.version || !sessionFor(current) || JSON.stringify(anchor(session.id)) !== currentAnchor) throw new Error('对话、绑定或主动设置已变化，停止旧轮。');

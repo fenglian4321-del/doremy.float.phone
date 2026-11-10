@@ -10,6 +10,7 @@ import { loadCharacters } from '@/lib/character-storage';
 import { setXinchaoChatSettings, subscribeXinchaoChat, xinchaoChatSettings, xinchaoChatStatus, type XinchaoChatSettings } from '@/lib/xinchao-chat';
 import { checkLastXinchaoFeedback, checkXinchaoFeedbackAvailable, setXinchaoFeedbackSettings, subscribeXinchaoFeedback, xinchaoFeedbackSettings, xinchaoFeedbackStatus, type XinchaoFeedbackSettings } from '@/lib/xinchao-feedback';
 import styles from './xinchao.module.css';
+import { XinchaoInnerPanel } from './inner-panel';
 import { XinchaoProactivePanel } from './proactive-panel';
 
 const time = (at: string) => new Date(at).toLocaleString('zh-CN', { hour12: false });
@@ -66,7 +67,7 @@ export function XinchaoApp({ onClose }: { onClose: () => void }) {
                 <div className={styles.orbit} aria-hidden="true"><span /><span /><i><Activity size={36} strokeWidth={1} /></i></div>
                 <h1>听见此刻的潮汐。</h1>
                 <p>让变化有一处安静的落点。<br />在这里查看心潮，按自己的节奏靠近。</p>
-                <span className={styles.badge}>{!enabled ? '查看已关闭' : busy ? '正在连接' : snapshot ? '只读连接已建立' : '尚未连通'}</span>
+                <span className={styles.badge}>{!enabled ? '查看已关闭' : busy ? '正在连接' : snapshot ? '状态连接已建立' : '尚未连通'}</span>
             </section>
             <section className={styles.card}>
                 <label className={styles.switchRow}><span><strong>允许 Float 查看</strong><small>打开时读取；之后由你手动刷新</small></span><input type="checkbox" role="switch" aria-label="允许 Float 查看心潮" checked={enabled} disabled={!ready} onChange={e => toggle(e.target.checked)} /></label>
@@ -84,13 +85,11 @@ export function XinchaoApp({ onClose }: { onClose: () => void }) {
                         {snapshot.now.available ? <p>{snapshot.now.text}</p> : <p>服务本次未提供此刻块（{snapshot.now.reason}）。</p>}
                         <small>此刻版本 {snapshot.now.revision} · {time(snapshot.now.generatedAt)}</small>
                     </section>
-                    <section className={styles.card}><div className={styles.sectionTitle}><h2>状态切片</h2><span>{snapshot.consciousness === 'awake' ? '醒着' : snapshot.consciousness === 'sleeping' ? '休息中' : snapshot.consciousness}</span></div>
-                        <div className={styles.drives}>{snapshot.drives.map(d => <div key={d.key}><span>{d.label}</span><meter min={0} max={1} value={d.value} aria-label={d.label} /><small>{Math.round(d.value * 100)}%</small></div>)}</div>
-                        <p className={styles.note}>只展示已有状态。数值是引擎记录，不用于推断现实关系。</p>
-                    </section>
+
                     <p className={styles.timestamp}>4.3.0 · 状态版本 {snapshot.revision}<br />读取于 {time(snapshot.fetchedAt)}{snapshot.lastSettledAt && <><br />最近结算 {time(snapshot.lastSettledAt)}</>}</p>
                 </> : !error && <p className={styles.empty}>{busy ? '正在取回这一刻…' : '刷新后显示本次状态。'}</p>}
             </>}
+            <XinchaoInnerPanel enabled={enabled} choices={chatChoices} />
             <section className={styles.card}>
                 <h2>联动，由你决定</h2>
                 <label className={styles.future}><span>生活聊天使用状态<small>本机，仅你明确选择的一个私聊</small></span><input type="checkbox" role="switch" aria-label="生活聊天使用状态" checked={chatSettings.enabled} disabled={!ready || (!chatSettings.enabled && !chatChoices.some(item => item.id === chatSettings.sessionId && item.characterId === chatSettings.characterId))} onChange={event => setXinchaoChatSettings({ ...chatSettings, enabled: event.target.checked })} /></label>
@@ -102,7 +101,7 @@ export function XinchaoApp({ onClose }: { onClose: () => void }) {
                 <div className={styles.sectionTitle}><button type="button" disabled={feedbackBusy} onClick={() => { setFeedbackBusy(true); void checkXinchaoFeedbackAvailable().then(available => { setFeedbackAvailable(available); setFeedbackNote(available ? '服务端已配置；选择绑定后可明确开启。' : '服务端尚未启用反馈，当前不会向心潮发送。'); }).catch(() => setFeedbackNote('检查未完成，请先验证本人会话。')).finally(() => setFeedbackBusy(false)); }}>检查对话反馈服务</button><button type="button" disabled={feedbackBusy} onClick={() => void checkLastXinchaoFeedback()}>核对上次反馈</button></div>
                 <p className={styles.note}>正常回复后发送去重的在场标识与固定“普通对话”反馈，不含原文，也不判断亲密或争执。心潮按自身规则处理普通互动，可能更新清醒、驱力与作息；不增加分类模型请求。20秒内最多一次，失败不阻断聊天、不自动重发。开关只控制本机及同源页面，不能撤回已发送信号。</p>
                 <p className={styles.note} role="status">{feedbackNote}</p>
-                <p className={styles.note}>工作区、AI私人空间、群聊和后台唤醒不自动接入；当前不自动判定互动类型或开启身体模拟。</p>
+                <p className={styles.note}>工作区、AI私人空间、群聊和后台唤醒不自动接入；不自动判定互动类型；模拟身体是否用于聊天由你单独选择。</p>
             </section>
             <XinchaoProactivePanel choices={chatChoices} />
         </main>

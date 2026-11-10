@@ -35,7 +35,7 @@ try {
     await assert.rejects(f.profile.executePersistentShizuku(chat, { action: 'system_info' }));
     await f.profile.configureShizukuProfile(chat, { enabled: true, allowChat: true, allowLaunch: true });
     profile.applications = [{ packageName: 'org.example.synthetic', label: '合成应用' }];
-    const capability = f.load('lib/internal-capability-storage.ts', { './kv-db': { ...f.db, registerKvMigration() {} }, './shizuku-profile': f.profile }, true, { window: native });
+    const capability = f.load('lib/internal-capability-storage.ts', { './kv-db': { ...f.db, registerKvMigration() {} }, './shizuku-profile': f.profile, './xinchao-core': { innerPreferences:()=>({tools:false,binding:null}) } }, true, { window: native });
     assert.ok(capability.getEnabledInternalCapabilities('chat').some(c => c.id === 'shizuku_phone'));
     const executor = f.load('lib/tool-executor.ts', { './shizuku-profile': f.profile, './internal-capability-storage': capability, './tool-storage': { loadRestTools: () => [], loadRestToolPackages: () => [], loadCompositeTools: () => [], loadCompositeToolPackages: () => [], loadMcpServers: () => [] } }, true, { window: native });
     for (const mode of ['chat', 'group_chat']) {

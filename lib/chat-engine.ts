@@ -2485,7 +2485,7 @@ async function generateNativeChatCompletion(
             rawContent: displayContent,
             reasoning: onlineThinkingEnabled ? (extractThinkingTag(result.content, onlineThinkingTag) || undefined) : result.reasoning,
             openRouterReasoningDetails: onlineThinkingEnabled ? undefined : result.openRouterReasoningDetails,
-            toolCalls: result.toolCalls,
+            toolCalls: result.toolCalls.map(call => nativeBundle.nameMap.get(call.name) === "心潮内室" ? { ...call, args: { action: call.args.action } } : call),
         });
         if (afterActionStrip) {
             parts.push({ text: afterActionStrip });
@@ -2641,7 +2641,7 @@ async function generateNativeChatCompletion(
             callbacks?.onNativeToolResult?.({
                 toolCallId: nativeCall.id,
                 name: nativeCall.name,
-                content: outcome.formattedContent,
+                content: outcome.result.name === "心潮内室" ? "心潮内室工具已返回，本轮私密正文已省略。" : outcome.formattedContent,
                 toolExecutionId,
             });
             requestMessages.push({
@@ -3125,13 +3125,14 @@ async function generateChatCompletionCore(
             const toolExecutionId = createToolExecutionId();
             callbacks?.onToolExecution?.(results, toolResultContent || undefined, { toolExecutionId });
 
-            if (toolResultContent && resultsForContinuation.length > 0) {
+            const continuationContent = resultsForContinuation.length > 0 ? formatToolResults(resultsForContinuation) : "";
+            if (continuationContent && resultsForContinuation.length > 0) {
                 throwIfAborted(options?.signal);
-                callbacks?.onToolResult?.(toolResultContent, { toolExecutionId });
+                if (toolResultContent) callbacks?.onToolResult?.(toolResultContent, { toolExecutionId });
                 const idx = findInsertIdx();
                 const insertions: LLMMessage[] = [
                     { role: "assistant", content: assistantForToolContext, _debugMeta: { _fromHistory: true } },
-                    { role: "user", content: toolResultContent, _debugMeta: { _fromHistory: true } },
+                    { role: "user", content: continuationContent, _debugMeta: { _fromHistory: true } },
                 ];
                 if (config.enableImageRecognition) {
                     for (const r of results) {
