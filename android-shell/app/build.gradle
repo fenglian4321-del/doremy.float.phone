@@ -44,8 +44,8 @@ android {
         // 1.0.30: scoped SAF text directories, user picker, create-only writes.
         // 1.0.31: task-scoped UI tools and independently optional heart wake.
         // 1.0.32: compose explicitly granted UI tools in the workbench task.
-        versionCode 33
-        versionName "1.0.34"
+        versionCode 34
+        versionName "1.0.35"
         buildConfigField "String", "SITE_URL", "\"${siteUrl}\""
     }
 

@@ -6,6 +6,24 @@ public final class SiteHttpAuthPolicyTest {
     private static void check(boolean value) { checks++; if (!value) throw new AssertionError("check " + checks); }
     private static SiteHttpAuthPolicy fresh() { SiteHttpAuthPolicy p = new SiteHttpAuthPolicy(SITE); p.begin(SITE + "/"); return p; }
     public static void main(String[] args) {
+        // Reproduce the 1.0.34 ordering: a challenge can arrive before the
+        // WebView's onPageStarted. Arm from the native load request instead.
+        SiteHttpAuthPolicy early = new SiteHttpAuthPolicy(SITE);
+        check(!early.canChallenge("float.example.test", null));
+        long armed = early.begin(SITE + "/");
+        early.resource(SITE + "/", true);
+        check(early.canChallenge("float.example.test", null));
+        check(early.submit(armed, "float.example.test", null));
+        check(early.started(SITE + "/") == armed);
+        check(early.belongs(armed));
+        check(early.submit(armed, "float.example.test", SITE + "/"));
+        check(early.started(SITE + "/") == armed);
+        check(early.submit(armed, "float.example.test", SITE + "/"));
+        check(!early.submit(armed, "float.example.test", SITE + "/"));
+        early.invalidate();
+        check(!early.canChallenge("float.example.test", SITE + "/"));
+        check(early.started("https://other.test/") != armed);
+        check(!early.canChallenge("float.example.test", "https://other.test/"));
         SiteHttpAuthPolicy p = fresh();
         check(p.canChallenge("float.example.test", SITE + "/"));
         check(p.canChallenge("FLOAT.EXAMPLE.TEST", SITE + ":443/"));

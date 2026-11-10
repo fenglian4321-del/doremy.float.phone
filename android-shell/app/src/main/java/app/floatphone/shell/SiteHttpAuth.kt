@@ -28,6 +28,9 @@ class SiteHttpAuth(private val activity: Activity, site: String, private val cle
     private var pending: Pending? = null
     private var deferred: Runnable? = null
     private var closed = false
+    private var challengeCount = 0
+    private var status = "尚未发起站点加载"
+    private var lastChallenge = "尚未收到"
     private fun cancel(value: Pending) {
         if (!value.settled) { value.settled = true; runCatching { value.handler.cancel() } }
         value.username?.text?.clear(); value.password?.text?.clear()
@@ -36,12 +39,18 @@ class SiteHttpAuth(private val activity: Activity, site: String, private val cle
         val dialog = value.dialog; value.dialog = null; dialog?.dismiss()
     }
     private fun cancelDeferred() { deferred?.let { main.removeCallbacks(it) }; deferred = null }
-    fun started(url: String?) { cancelDeferred(); pending?.let { cancel(it) }; policy.begin(url.orEmpty()) }
-    fun navigationRequested() { cancelDeferred(); pending?.let { cancel(it) }; policy.invalidate() }
+    fun requested(url: String) { cancelDeferred(); pending?.let { cancel(it) }; policy.begin(url); status = "已准备主文档，等待认证挑战" }
+    fun started(url: String?) {
+        val before = policy.epoch(); policy.started(url.orEmpty())
+        if (policy.epoch() != before) { cancelDeferred(); pending?.let { cancel(it) } }
+    }
+    fun navigationRequested() { cancelDeferred(); pending?.let { cancel(it) }; policy.invalidate(); status = "导航改变，旧认证已取消" }
     fun resource(url: String, mainFrame: Boolean) { policy.resource(url, mainFrame) }
-    fun finished(url: String?): Boolean = policy.finished(url.orEmpty(), pending != null)
+    fun finished(url: String?): Boolean { val complete = policy.finished(url.orEmpty(), pending != null); if (complete) status = "主文档加载完成"; return complete }
+    fun diagnostics() = "$status；收到认证挑战 $challengeCount 次；上次挑战：$lastChallenge"
     fun authenticationFailure(url: String): Boolean {
         if (!policy.authFailure(url)) return false
+        if (pending == null) status = "站点认证响应未完成，等待认证回调"
         val epoch = policy.epoch(); cancelDeferred()
         val action = Runnable { deferred = null; if (!closed && !activity.isFinishing && !activity.isDestroyed && pending == null && policy.belongs(epoch)) recovery() }
         deferred = action; main.postDelayed(action, 1000)
@@ -50,7 +59,12 @@ class SiteHttpAuth(private val activity: Activity, site: String, private val cle
     fun challenge(view: WebView, handler: HttpAuthHandler, host: String) {
         // This API has no request URL/frame. Accept only the main-document
         // loading window before ANY subresource; ambiguous challenges are cancelled.
-        if (closed || activity.isFinishing || activity.isDestroyed || !policy.canChallenge(host, view.url)) { runCatching { handler.cancel() }; return }
+        challengeCount++
+        if (closed || activity.isFinishing || activity.isDestroyed || !policy.canChallenge(host, view.url)) {
+            status = "认证已取消：" + if (closed || activity.isFinishing || activity.isDestroyed) "页面已退出" else policy.rejection(host, view.url)
+            lastChallenge = status
+            runCatching { handler.cancel() }; return
+        }
         cancelDeferred(); pending?.let { cancel(it) }; clearRecovery()
         val value = Pending(handler, policy.epoch()); pending = value
         val fields = LinearLayout(activity).apply { orientation = LinearLayout.VERTICAL; setPadding(40, 8, 40, 8); isSaveEnabled = false; importantForAutofill = View.IMPORTANT_FOR_AUTOFILL_NO_EXCLUDE_DESCENDANTS }
@@ -58,25 +72,28 @@ class SiteHttpAuth(private val activity: Activity, site: String, private val cle
         val username = EditText(activity).apply { hint = "站点账号"; contentDescription = "站点账号"; inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS; isSingleLine = true; isSaveEnabled = false; filters = arrayOf(InputFilter.LengthFilter(256)); importantForAutofill = View.IMPORTANT_FOR_AUTOFILL_NO_EXCLUDE_DESCENDANTS; imeOptions = EditorInfo.IME_FLAG_NO_PERSONALIZED_LEARNING or EditorInfo.IME_FLAG_NO_EXTRACT_UI }
         val password = EditText(activity).apply { hint = "站点密码"; contentDescription = "站点密码"; inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD; isSingleLine = true; isSaveEnabled = false; filters = arrayOf(InputFilter.LengthFilter(1024)); importantForAutofill = View.IMPORTANT_FOR_AUTOFILL_NO_EXCLUDE_DESCENDANTS; imeOptions = EditorInfo.IME_FLAG_NO_PERSONALIZED_LEARNING or EditorInfo.IME_FLAG_NO_EXTRACT_UI }
         value.username = username; value.password = password; fields.addView(username); fields.addView(password)
-        val dialog = AlertDialog.Builder(activity).setTitle("登录私人站点").setView(fields).setNegativeButton("取消") { _, _ -> cancel(value); recovery() }.setPositiveButton("登录", null).create()
+        val dialog = AlertDialog.Builder(activity).setTitle("登录私人站点").setView(fields).setNegativeButton("取消") { _, _ -> status = "本人取消登录"; cancel(value); recovery() }.setPositiveButton("登录", null).create()
         value.dialog = dialog
-        dialog.setOnCancelListener { cancel(value); recovery() }
+        dialog.setOnCancelListener { status = "本人取消登录"; cancel(value); recovery() }
         dialog.setOnDismissListener { cancel(value) }
         dialog.window?.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
         try {
             dialog.show()
+            status = "登录框已显示，等待本人输入"
+            lastChallenge = "已显示原生登录框"
             dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
                 if (closed || pending !== value || value.settled || activity.isFinishing || activity.isDestroyed || !policy.belongs(value.epoch)) { cancel(value); return@setOnClickListener }
                 val user = username.text.toString(); val pass = password.text.toString()
                 if (!SiteHttpAuthPolicy.validInput(user, pass)) { password.error = "请填写有效账号和密码"; return@setOnClickListener }
                 if (!policy.submit(value.epoch, host, view.url)) { cancel(value); recovery(); return@setOnClickListener }
                 value.settled = true; pending = null
+                status = "已手动提交，等待站点响应"
                 // Never use get/setHttpAuthUsernamePassword, logs, URLs, JS,
                 // preferences or a captured credential for automatic retries.
-                runCatching { handler.proceed(user, pass) }.onFailure { recovery() }
+                runCatching { handler.proceed(user, pass) }.onFailure { runCatching { handler.cancel() }; status = "提交认证响应未完成"; recovery() }
                 cancel(value)
             }
-        } catch (_: Throwable) { cancel(value); recovery() }
+        } catch (_: Throwable) { status = "原生登录框未能显示"; cancel(value); recovery() }
     }
     fun close() { closed = true; cancelDeferred(); pending?.let { cancel(it) }; policy.invalidate() }
 }

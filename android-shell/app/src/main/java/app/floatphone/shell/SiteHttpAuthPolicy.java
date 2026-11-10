@@ -28,6 +28,9 @@ public final class SiteHttpAuthPolicy {
         return path(left).equals(path(right)) && java.util.Objects.equals(left.getRawQuery(), right.getRawQuery());
     }
     public synchronized long begin(String url) { epoch++; document = url; loading = trusted(url); failed = false; attempts = 0; return epoch; }
+    // onPageStarted may be delivered on commit, AFTER the auth challenge.
+    // An already armed navigation must retain its epoch, dialog and attempts.
+    public synchronized long started(String url) { return sameDocument(document, url) ? epoch : begin(url); }
     public synchronized void resource(String url, boolean main) {
         // Once this WebView has loaded any subresource, this callback can no
         // longer prove which request was challenged. A fresh user-driven
@@ -53,6 +56,14 @@ public final class SiteHttpAuthPolicy {
         loading = false; committed = true; return true;
     }
     public synchronized boolean belongs(long expected) { return epoch == expected && loading; }
+    public synchronized String rejection(String host, String current) {
+        if (!loading) return "主文档未准备或已结束";
+        if (subresources) return "已有子资源，需手动重新加载";
+        if (attempts >= 3) return "已达本次手动重试次数";
+        if (!trusted(document)) return "站点来源不匹配";
+        if (host == null || !origin.getHost().equalsIgnoreCase(host)) return "挑战站点不匹配";
+        return "当前主文档不匹配";
+    }
     public synchronized long epoch() { return epoch; }
     public synchronized void invalidate() { epoch++; loading = false; }
     public String displayOrigin() { return "https://" + origin.getHost() + (port(origin) == 443 ? "" : ":" + port(origin)); }

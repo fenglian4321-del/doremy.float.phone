@@ -10,6 +10,13 @@ assert.match(main,/override fun shouldInterceptRequest[\s\S]{0,240}siteHttpAuth\
 assert.match(main,/response.statusCode == 401 && siteHttpAuth\?\.authenticationFailure/);
 assert.match(main,/override fun onDestroy\(\)[\s\S]{0,150}siteHttpAuth\?\.close/);
 assert.match(main,/siteHttpAuth\?\.started\(url\)/);assert.match(main,/siteHttpAuth\?\.navigationRequested\(\)/);
+const loader=main.match(/private fun loadMainPage\(url: String\) \{([\s\S]*?)\n    \}/)?.[1];
+assert.ok(loader && loader.indexOf('siteHttpAuth?.requested(url)') < loader.indexOf('webView.loadUrl(url)'));
+assert.equal((main.match(/webView\.loadUrl\(/g)||[]).length,1,'Every native main-frame load must use the pre-armed loader');
+assert.match(main,/loadMainPage\(consumeOpenUrl\(intent\) \?: SITE_URL\)/);
+assert.match(main,/loadMainPage\(target\)/);
+assert.match(main,/siteHttpAuth\?\.requested\(url.toString\(\)\)/);
+assert.match(auth,/policy\.started\(url.orEmpty\(\)\)/);
 assert.match(auth,/policy\.submit\(value.epoch, host, view.url\)/);assert.match(auth,/handler.proceed\(user, pass\)/);
 assert.match(auth,/if \(!value.settled\)[\s\S]{0,100}value.handler.cancel\(\)/);
 assert.match(auth,/TYPE_TEXT_VARIATION_PASSWORD/);assert.match(auth,/FLAG_SECURE/);assert.match(auth,/IMPORTANT_FOR_AUTOFILL_NO_EXCLUDE_DESCENDANTS/);

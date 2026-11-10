@@ -388,7 +388,7 @@ class MainActivity : AppCompatActivity() {
                 setBackgroundColor(android.graphics.Color.rgb(248, 246, 242))
             }
             panel.addView(TextView(this).apply {
-                text = "小手机 · 启动恢复"
+                text = "小手机 · 启动恢复 · $VERSION"
                 textSize = 13f
                 setTextColor(android.graphics.Color.DKGRAY)
             })
@@ -399,7 +399,7 @@ class MainActivity : AppCompatActivity() {
                 setPadding(0, 12, 0, 10)
             })
             panel.addView(TextView(this).apply {
-                text = detail + "\n\n你可以先复制诊断摘要反馈问题，或尝试重新加载。此页面不会清除聊天、角色记忆或应用数据。"
+                text = detail + "\n认证状态：${siteHttpAuth?.diagnostics() ?: "网页尚未初始化，请点重新加载"}" + "\n\n你可以先复制诊断摘要反馈问题，或尝试重新加载。此页面不会清除聊天、角色记忆或应用数据。"
                 textSize = 14f
                 setTextColor(android.graphics.Color.DKGRAY)
                 setPadding(0, 0, 0, 18)
@@ -414,7 +414,7 @@ class MainActivity : AppCompatActivity() {
                     LinearLayout.LayoutParams.WRAP_CONTENT
                 ).apply { bottomMargin = 8 })
             }
-            action("退出恢复模式并重试（不清除数据）") {
+            action("重新加载站点并登录（不清除数据）") {
                 getSharedPreferences("float_startup_diagnostics", Context.MODE_PRIVATE)
                     .edit()
                     .putBoolean("launch_in_progress", false)
@@ -435,6 +435,7 @@ class MainActivity : AppCompatActivity() {
                     appendLine("设备：${Build.MANUFACTURER} ${Build.MODEL}")
                     appendLine("WebView：${if (recoveryBoot) "安全模式下未初始化" else runCatching { WebView.getCurrentWebViewPackage()?.let { it.packageName + " " + it.versionName } }.getOrNull() ?: "未知"}")
                     appendLine("站点：${Uri.parse(SITE_URL).scheme}://${Uri.parse(SITE_URL).host}")
+                    appendLine("站点认证：${siteHttpAuth?.diagnostics() ?: "尚未初始化"}")
                     appendLine("问题：$title")
                     appendLine("详情：$detail")
                     val crashFile = File(filesDir, "last-native-crash.txt")
@@ -1086,7 +1087,7 @@ private fun deleteCachedSharedVideoInternal(cacheId: String): Boolean {
             val lastWebCrash = if (webCrashFile.isFile) webCrashFile.readText().takeLast(6000) else ""
             showNativeRecoveryScreen(
                 "检测到上次启动未完成",
-                "已进入原生恢复模式，暂不启动网页和原生桥，避免反复闪退。请先复制诊断摘要；确认后再点“退出恢复模式并重试”。\n\n上次异常摘要：\n" + lastCrash + (if (lastWebCrash.isNotBlank()) "\n\n上次 WebView 崩溃：\n" + lastWebCrash else "")
+                "已进入原生恢复模式，暂不启动网页和原生桥，避免反复闪退。请先复制诊断摘要；确认后再点“重新加载站点并登录”。\n\n上次异常摘要：\n" + lastCrash + (if (lastWebCrash.isNotBlank()) "\n\n上次 WebView 崩溃：\n" + lastWebCrash else "")
             )
             return
         }
@@ -1244,7 +1245,10 @@ private fun deleteCachedSharedVideoInternal(cacheId: String): Boolean {
                 val scheme = url.scheme ?: return false
                 // 站内导航留在壳里；顶层 http(s) 外链和自定义协议交给系统
                 if (scheme == "http" || scheme == "https") {
-                    if (isTrustedShellOrigin(url.toString()) && url.userInfo == null) return false
+                    if (isTrustedShellOrigin(url.toString()) && url.userInfo == null) {
+                        siteHttpAuth?.requested(url.toString())
+                        return false
+                    }
                     return runCatching {
                         startActivity(Intent(Intent.ACTION_VIEW, url)); true
                     }.getOrDefault(true)
@@ -1363,7 +1367,7 @@ private fun deleteCachedSharedVideoInternal(cacheId: String): Boolean {
         })
 
         // 冷启动带深链（如来电接听）直接加载目标；否则加载首页
-        webView.loadUrl(consumeOpenUrl(intent) ?: SITE_URL)
+        loadMainPage(consumeOpenUrl(intent) ?: SITE_URL)
         ensurePushService()
     }
 
@@ -1377,7 +1381,7 @@ private fun deleteCachedSharedVideoInternal(cacheId: String): Boolean {
             return
         }
         // SPA 已加载：loadUrl 到同页 hash 只触发 hashchange，不会整页重载
-        webView.loadUrl(target)
+        loadMainPage(target)
     }
 
     /**
@@ -1542,6 +1546,12 @@ private fun deleteCachedSharedVideoInternal(cacheId: String): Boolean {
             runCatching { CallOverlayService.onHostForeground() }
             runCatching { CheckInService.onHostForeground() }
         }
+    }
+
+    private fun loadMainPage(url: String) {
+        // Arm before loadUrl: HTTP authentication can precede onPageStarted.
+        siteHttpAuth?.requested(url)
+        webView.loadUrl(url)
     }
 
     override fun onDestroy() {

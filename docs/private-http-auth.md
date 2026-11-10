@@ -1,3 +1,9 @@
+> 1.0.35/code34 修正1.0.34真机未弹框的回调顺序缺口：在原生loadUrl及允许的顶层导航之前准备认证，而不等待onPageStarted。后到的onPageStarted保持当前认证代际/对话框和手动提交次数。恢复页显示版本和不含凭据的固定认证状态；上次启动未完成时可点“重新加载站点并登录（不清除数据）”。
+
+用户反馈1.0.34未弹框，不能以此前51项策略测试宣称已在真机修复。新增回调先于onPageStarted的复现与后到回调保持代际的测试，并静态核对所有原生主页面loadUrl入口在请求前准备。匿名实际HTTPS请求确认Caddy返回401和Basic挑战，未输入账号。
+
+时序依据：[Chromium AwWebContentsObserver](https://chromium.googlesource.com/chromium/src/+/554be8c5f4dfc501ae0825504ffe64440f32387a/android_webview/java/src/org/chromium/android_webview/AwWebContentsObserver.java)在部分配置于导航提交时发送onPageStarted；HTTP认证不能依赖该回调先到。
+
 # 私人站点 HTTP 登录修复
 
 2026-11-10，FloatShell 1.0.34/code33。纯 APK 原生修复，网页/API/VPS 运行代码未修改，不需要为此重新部署服务端或关闭认证。
