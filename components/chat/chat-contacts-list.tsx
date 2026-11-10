@@ -4,7 +4,7 @@ import React, { useState, useEffect, useCallback, useRef, useMemo, useDeferredVa
 import { loadChatContacts, ChatContact, createOrGetSession, ChatSession, addChatContact, pushChatMessage, loadChatMessages } from "@/lib/chat-storage";
 import { resolveUserIdentity } from "@/lib/settings-storage";
 import { PENDING_REPLY_PREFIX } from "@/lib/friend-request-engine";
-import { loadCharacters } from "@/lib/character-storage";
+import { loadCharacters, CHARACTERS_UPDATED_EVENT } from "@/lib/character-storage";
 import { Character } from "@/lib/character-types";
 import { loadMomentPosts } from "@/lib/moments-storage";
 import {
@@ -58,7 +58,8 @@ export function ChatContactsList({ onCloseApp, onSelectSession, onSelectMascot, 
     const [mascotAvatarUrl, setMascotAvatarUrl] = useState(mascotSettings.avatarImage || DEFAULT_MASCOT_AVATAR);
 
     const identity = useMemo(() => resolveUserIdentity(), []);
-    const chars = useMemo(() => loadCharacters(), []);
+    const [chars, setChars] = useState(loadCharacters);
+    useEffect(() => { const reload = () => setChars(loadCharacters()); window.addEventListener(CHARACTERS_UPDATED_EVENT, reload); return () => window.removeEventListener(CHARACTERS_UPDATED_EVENT, reload); }, []);
     const deferredContactFilter = useDeferredValue(contactFilter);
     const bodyRef = useRef<HTMLDivElement>(null);
     const sectionRefs = useRef<Record<string, HTMLDivElement | null>>({});
@@ -117,8 +118,7 @@ export function ChatContactsList({ onCloseApp, onSelectSession, onSelectMascot, 
         setLatestPost(map);
 
         setPendingRequests(getPendingFriendRequests());
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, []);
+    }, [chars]);
 
     useEffect(() => {
         refresh();

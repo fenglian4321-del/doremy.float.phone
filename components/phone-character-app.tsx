@@ -10,6 +10,7 @@ import {
   parseCharacterFromJson,
   parseCharacterFromPng,
   saveCharacters,
+  saveCharactersAsync,
   loadBackgroundItems,
   saveBackgroundItems,
   type CharacterImportData,
@@ -196,6 +197,7 @@ function getCharacterTimeZoneOptions(currentTimeZone = ""): string[] {
 export function PhoneCharacterApp({ onClose, onNotice }: PhoneCharacterAppProps) {
   const [view, setView] = useState<{ type: ViewType; id: string | null; isEditing?: boolean }>({ type: "list", id: null, isEditing: false });
   const [characters, setCharacters] = useState<Character[]>(() => loadCharacters());
+  const [draftCharacter, setDraftCharacter] = useState(() => createCharacter({ name: "", persona: "", avatar: null }));
   const [bgItems, setBgItems] = useState<CanvasBgItem[]>(() => loadBackgroundItems());
   const [transition, setTransition] = useState<TransitionState | null>(null);
   const [pendingPlacementChar, setPendingPlacementChar] = useState<Character | null>(null);
@@ -275,7 +277,7 @@ export function PhoneCharacterApp({ onClose, onNotice }: PhoneCharacterAppProps)
             onUpdateBgItems={updateBgItems}
             onClose={onClose}
             onSelect={handleSelectChar}
-            onCreate={(style: number) => { setPendingPolaroidStyle(style); setView({ type: "detail", id: null, isEditing: true }); }}
+            onCreate={(style: number) => { setDraftCharacter(createCharacter({ name: "", persona: "", avatar: null })); setPendingPolaroidStyle(style); setView({ type: "detail", id: null, isEditing: true }); }}
             pendingPlacementChar={pendingPlacementChar}
             onStartCharPlacement={(char: Character) => setPendingPlacementChar(char)}
             onPlacementDone={(placed: Character) => {
@@ -294,7 +296,7 @@ export function PhoneCharacterApp({ onClose, onNotice }: PhoneCharacterAppProps)
 
         {view.type === "detail" && (
           <CharArchiveView
-            char={view.id ? (characters.find((c) => c.id === view.id) ?? createCharacter({ name: "", persona: "", avatar: null })) : createCharacter({ name: "", persona: "", avatar: null })}
+            char={view.id ? (characters.find((c) => c.id === view.id) ?? draftCharacter) : draftCharacter}
             isEditing={view.isEditing}
             isExisting={Boolean(view.id)}
             onBack={handleBackFromDetail}
@@ -306,7 +308,7 @@ export function PhoneCharacterApp({ onClose, onNotice }: PhoneCharacterAppProps)
                 setView({ type: "list", id: null, isEditing: false });
               }
             }}
-            onSave={(data, createVersion) => {
+            onSave={async (data, createVersion) => {
               const existing = view.id ? characters.find((c) => c.id === view.id) : null;
               if (existing) {
                 const nextVersion = createVersion
@@ -317,7 +319,8 @@ export function PhoneCharacterApp({ onClose, onNotice }: PhoneCharacterAppProps)
                   ...data,
                   updatedAt: new Date().toISOString(),
                 };
-                updateChars(characters.map((c) => (c.id === existing.id ? updated : c)));
+                await saveCharactersAsync(loadCharacters().map((c) => (c.id === existing.id ? updated : c)));
+                setCharacters(loadCharacters());
                 setView({ type: "detail", id: existing.id, isEditing: false });
                 onNotice(createVersion
                   ? `已备份旧卡，当前为 V${nextVersion}`
@@ -325,9 +328,12 @@ export function PhoneCharacterApp({ onClose, onNotice }: PhoneCharacterAppProps)
               } else {
                 const newChar = createCharacter(data);
                 newChar.polaroidStyle = pendingPolaroidStyle;
-                setPendingPlacementChar(newChar);
-                setView({ type: "list", id: null, isEditing: false });
-                onNotice("点击画布放置角色");
+                await saveCharactersAsync([...loadCharacters(), newChar]);
+                setCharacters(loadCharacters());
+                if (safeWorldId !== DEFAULT_CHARACTER_WORLD_ID) moveCharacterToWorld(newChar.id, safeWorldId);
+                setWorldGroups(loadCharacterWorldGroups());
+                setView({ type: "detail", id: newChar.id, isEditing: false });
+                onNotice("角色已保存，可开始对话；返回角色库可调整位置。");
               }
             }}
             onRestoreVersion={(version) => {
@@ -1864,7 +1870,7 @@ function CharArchiveView({
   onBack: () => void;
   onEdit: () => void;
   onCancelEdit?: () => void;
-  onSave?: (data: CharacterImportData, createVersion: boolean) => void;
+  onSave?: (data: CharacterImportData, createVersion: boolean) => void | Promise<void>;
   onRestoreVersion?: (version: CharacterVersion) => void;
   onDelete: () => void | Promise<void>;
   onExportJson: () => void;
@@ -2058,12 +2064,17 @@ function CharArchiveView({
     setTagInput("");
   }
 
-  function commitSave(createVersion: boolean) {
+  const [saveBusy, setSaveBusy] = useState(false);
+  const [saveError, setSaveError] = useState("");
+  async function commitSave(createVersion: boolean) {
+    if (saveBusy) return;
+    setSaveBusy(true); setSaveError("");
+    try {
     const trimmedTimeZone = timeZone.trim();
     const normalizedTimeZone = trimmedTimeZone ? normalizeTimeZone(trimmedTimeZone) : undefined;
     if (onSave) {
       const trimmedBrief = briefPersona.trim();
-      onSave({
+      await onSave({
         name: name.trim() || char.name || "UNNAMED",
         persona,
         personality: personality.trim() || undefined,
@@ -2082,6 +2093,8 @@ function CharArchiveView({
         polaroidImageZoom: clampCharacterImageValue(polaroidImageZoom, 1, 3, 1),
       }, createVersion);
     }
+    } catch (error) { const message = error instanceof Error ? error.message : "保存未完成，请重试"; setSaveError(message); onNotice(message); }
+    finally { setSaveBusy(false); }
   }
 
   function handleSave() {
@@ -2570,7 +2583,7 @@ function CharArchiveView({
             !dummy && isEditing ? (
               <>
                 <button className="char-archive-btn char-archive-btn-danger" onClick={() => { if (isDirty()) { setShowUnsavedConfirm("cancel"); } else { onCancelEdit?.(); } }}>CANCEL</button>
-                <button className="char-archive-btn bg-[var(--c-text)] text-[var(--c-page-body-bg)] border-[var(--c-input-border)]" onClick={handleSave}>SAVE</button>
+                <button className="char-archive-btn bg-[var(--c-text)] text-[var(--c-page-body-bg)] border-[var(--c-input-border)]" disabled={saveBusy} onClick={handleSave}>{saveBusy ? "保存中…" : "保存角色／助手"}</button>{saveError && <p role="alert">{saveError}</p>}
               </>
             ) : !dummy && !isEditing ? (
               <>

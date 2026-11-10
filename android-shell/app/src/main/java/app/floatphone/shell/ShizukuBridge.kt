@@ -74,10 +74,22 @@ class ShizukuBridge(private val activity: Activity, private val origin: String, 
         override fun onBindingDied(name: ComponentName) { lost("disconnected") }
         override fun onNullBinding(name: ComponentName) { lost("disconnected") }
     }
-    private val received = Shizuku.OnBinderReceivedListener { lost("authorized") }
+    private val profileDelegate = lazy { ShizukuPersistentProfile(activity, trusted, { ready(); Unit }, { serviceUid }, { id, op, pkg -> ready().execute(secret, id, op, pkg) }, { id -> service?.cancel(secret, id); Unit }) }
+    private val profile by profileDelegate
+    private fun reconnectSaved() { if (!closed && trusted.invoke() && profile.enabled() && permitted()) main.post { runCatching { connectService() } } }
+    private fun connectService() {
+        requirePermission(); if (Shizuku.getVersion() < 13) fail("unsupported")
+        if (service == null && !bound && state != "connecting") {
+            lost("connecting"); bound = true
+            main.post { runCatching { Shizuku.bindUserService(args, connection) }.onFailure { lost("disconnected") } }
+            val expected = epoch
+            main.postDelayed({ if (epoch == expected && service == null) { lost("disconnected"); bound = false; runCatching { Shizuku.unbindUserService(args, connection, true) } } }, 15000)
+        }
+    }
+    private val received = Shizuku.OnBinderReceivedListener { lost("authorized"); reconnectSaved() }
     private val dead = Shizuku.OnBinderDeadListener { lost("disconnected") }
     private val permission = Shizuku.OnRequestPermissionResultListener { request, result ->
-        if (request == 7133) { if (result == PackageManager.PERMISSION_GRANTED) state = "authorized" else lost("denied") }
+        if (request == 7133) { if (result == PackageManager.PERMISSION_GRANTED) { state = "authorized"; reconnectSaved() } else lost("denied") }
     }
     init {
         Shizuku.addBinderReceivedListenerSticky(received)
@@ -106,14 +118,15 @@ class ShizukuBridge(private val activity: Activity, private val origin: String, 
     }
     private fun finish(job: Job, result: JSONObject) { job.result = result.put("requestId", job.id).put("operation", job.operation) }
     private fun cancel(job: Job) { job.cancelled = true; job.call?.cancel(); runCatching { service?.cancel(secret, job.id) }; main.post { job.dialog?.dismiss() }; finish(job, JSONObject().put("state", "failed").put("code", if (job.reserved) "action_uncertain" else "cancelled")) }
-    @Synchronized private fun lost(next: String) { val wasBound = bound; bound = false; epoch++; state = next; jobs.values.forEach { cancel(it) }; grants.clear(); service?.asBinder()?.let { runCatching { it.unlinkToDeath(death, 0) } }; service = null; serviceUid = -1; if (wasBound) main.post { runCatching { Shizuku.unbindUserService(args, connection, true) } } }
+    @Synchronized private fun lost(next: String) { val wasBound = bound; bound = false; epoch++; state = next; if (profileDelegate.isInitialized()) profile.invalidate(); jobs.values.forEach { cancel(it) }; grants.clear(); service?.asBinder()?.let { runCatching { it.unlinkToDeath(death, 0) } }; service = null; serviceUid = -1; if (wasBound) main.post { runCatching { Shizuku.unbindUserService(args, connection, true) } } }
     fun status(): String = runCatching {
         trusted(); val installed = runCatching { activity.packageManager.getPackageInfo("moe.shizuku.privileged.api", 0); true }.getOrDefault(false)
         val alive = Shizuku.pingBinder(); val allowed = if (alive) permitted() else false
         if (!alive && service != null) lost("disconnected")
         if (alive && !allowed && service != null) lost("revoked")
+        if (alive && allowed && service == null) reconnectSaved()
         val actual = if (!alive) { if (state == "disconnected") state else if (!installed) "not_installed" else "not_running" } else if (Shizuku.getVersion() < 13) "unsupported" else if (!allowed) { if (state in listOf("denied", "revoked")) state else "permission_required" } else if (service != null) "ready" else if (state in listOf("connecting", "disconnected")) state else "authorized"
-        envelope(JSONObject().put("state", "complete").put("status", actual).put("binderAlive", alive).put("authorized", allowed).put("ready", actual == "ready").put("uid", serviceUid).put("identity", if (serviceUid == 0) "root" else if (serviceUid == 2000) "shell" else "unknown").put("epoch", epoch))
+        envelope(JSONObject().put("state", "complete").put("status", actual).put("binderAlive", alive).put("authorized", allowed).put("ready", actual == "ready").put("uid", serviceUid).put("profile", profile.view()).put("identity", if (serviceUid == 0) "root" else if (serviceUid == 2000) "shell" else "unknown").put("epoch", epoch))
     }.getOrElse { error((it as? Failure)?.code ?: "unavailable") }
     private fun authority(g: Grant, job: Job) {
         check(g, job); if (g.run.isEmpty()) fail("task_required")
@@ -139,6 +152,7 @@ class ShizukuBridge(private val activity: Activity, private val origin: String, 
         }
     }
     fun finishGrant(id: String, component: ComponentName?) {
+        if (profileDelegate.isInitialized() && profile.ownsPicker(id)) { profile.picked(id, component); return }
         val job = jobs[id] ?: return
         runCatching {
             ready(); if (job.cancelled || component == null || !ShizukuPolicy.packageAllowed(component.packageName, activity.packageName)) fail("package_denied")
@@ -151,6 +165,7 @@ class ShizukuBridge(private val activity: Activity, private val origin: String, 
     }
     fun control(raw: String, picker: (String) -> Unit): String = runCatching {
         trusted(); trimJobs(); if (raw.toByteArray().size > 8192) fail("invalid_request"); val b = JSONObject(raw); val op = b.getString("operation")
+        if (op.startsWith("profile_")) return@runCatching profile.control(raw, picker)
         val fields = when (op) {
             "permission", "connect", "disconnect" -> setOf("operation")
             "grant" -> setOf("operation", "scope", "requestId", "task", "allowLaunch")
@@ -160,9 +175,9 @@ class ShizukuBridge(private val activity: Activity, private val origin: String, 
             "probe", "result", "receipt", "cancel" -> setOf("operation", "scope", "requestId")
             else -> fail("invalid_request")
         }; if (b.keys().asSequence().toSet() != fields) fail("invalid_request")
-        if (op == "disconnect") { lost("disconnected"); bound = false; runCatching { Shizuku.unbindUserService(args, connection, true) }; return@runCatching status() }
+        if (op == "disconnect") { if (profileDelegate.isInitialized()) profile.disable(); lost("disconnected"); bound = false; runCatching { Shizuku.unbindUserService(args, connection, true) }; return@runCatching status() }
         if (op == "permission") { if (!Shizuku.pingBinder() || Shizuku.getVersion() < 13) fail("not_running"); main.post { runCatching { if (!Shizuku.shouldShowRequestPermissionRationale()) Shizuku.requestPermission(7133) else state = "denied" }.onFailure { state = "denied" } }; return@runCatching status() }
-        if (op == "connect") { requirePermission(); if (Shizuku.getVersion() < 13) fail("unsupported"); if (service == null && state != "connecting") { lost("connecting"); bound = true; main.post { runCatching { Shizuku.bindUserService(args, connection) }.onFailure { lost("disconnected") } }; val expected = epoch; main.postDelayed({ if (epoch == expected && service == null) { lost("disconnected"); bound = false; runCatching { Shizuku.unbindUserService(args, connection, true) } } }, 15000) }; return@runCatching status() }
+        if (op == "connect") { connectService(); return@runCatching status() }
         val s = scope(b.getJSONObject("scope"))
         if (op == "probe") {
             ready(); val id = b.getString("requestId")
@@ -226,6 +241,6 @@ class ShizukuBridge(private val activity: Activity, private val origin: String, 
         }
         envelope(JSONObject().put("state", "pending").put("requestId", id))
     }.getOrElse { error((it as? Failure)?.code ?: "unavailable") }
-    fun invalidateDocument() { grants.clear(); jobs.values.forEach { cancel(it) } }
-    fun close() { closed = true; lost("disconnected"); bound = false; runCatching { Shizuku.unbindUserService(args, connection, true) }; Shizuku.removeBinderReceivedListener(received); Shizuku.removeBinderDeadListener(dead); Shizuku.removeRequestPermissionResultListener(permission); worker.shutdownNow(); watcher.shutdownNow() }
+    fun invalidateDocument() { if (profileDelegate.isInitialized()) profile.invalidate(); grants.clear(); jobs.values.forEach { cancel(it) } }
+    fun close() { closed = true; if (profileDelegate.isInitialized()) profile.close(); lost("disconnected"); bound = false; runCatching { Shizuku.unbindUserService(args, connection, true) }; Shizuku.removeBinderReceivedListener(received); Shizuku.removeBinderDeadListener(dead); Shizuku.removeRequestPermissionResultListener(permission); worker.shutdownNow(); watcher.shutdownNow() }
 }

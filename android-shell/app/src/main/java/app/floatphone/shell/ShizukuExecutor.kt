@@ -56,7 +56,8 @@ class ShizukuExecutor : IShizukuExecutor.Stub() {
     }
     override fun execute(secret: String, id: String, operation: String, pkg: String): String {
         check(secret, id)
-        if (!DeviceUiPolicy.id(id) || !ShizukuPolicy.operation(operation) || seen.size >= 128 || !seen.add(id)) throw SecurityException("invalid_or_replayed_request")
+        if (!DeviceUiPolicy.id(id) || !ShizukuPolicy.operation(operation) || seen.size >= 64 || !seen.add(id)) throw SecurityException("invalid_or_replayed_request")
+        try {
         val result = identity().put("operation", operation).put("location", "android_shizuku").put("untrustedData", true)
         if (operation != "system_info") {
             if (!ShizukuPolicy.packageAllowed(pkg, "app.floatphone.shell")) throw SecurityException("package_denied")
@@ -74,6 +75,7 @@ class ShizukuExecutor : IShizukuExecutor.Stub() {
         }
         check(secret, id)
         return result.toString()
+        } finally { seen.remove(id); cancelled.remove(id) }
     }
     override fun cancel(secret: String, id: String) { checkOwner(secret); cancelled.add(id); processes[id]?.destroyForcibly() }
     private fun checkOwner(secret: String) { if (ownerUid != Binder.getCallingUid() || token != secret) throw SecurityException("owner_denied") }

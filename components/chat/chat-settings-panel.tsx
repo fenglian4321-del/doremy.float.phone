@@ -1,5 +1,6 @@
 "use client";
 
+import { ShizukuPanel } from '@/components/memory/shizuku-panel';
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import {
     CHAT_INITIAL_VISIBLE_MESSAGE_COUNT,
@@ -1065,6 +1066,7 @@ export function ChatSettingsPanel({
     return (
         <PageShell title="聊天信息" onBack={onClose} className="absolute inset-0 z-[100]">
             <div className="page-menu chat-info-menu">
+                <ShizukuPanel kind={session.isGroup ? "group_chat" : "chat"} workspaceId={session.id} />
                 {/* Basic Info & Search */}
                 <div className="menu-group">
                     <button className="menu-item" onClick={() => setEditingAlias(true)}>

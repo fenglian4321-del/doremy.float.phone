@@ -1,3 +1,4 @@
+import { executePersistentShizuku, type ShizukuScope } from './shizuku-profile';
 import type {
     CompositeToolConfig,
     CompositeToolPackageConfig,
@@ -25,7 +26,7 @@ import { executeCustomAppToolCall } from "./custom-app-tool-runtime";
 import { executeLifeToolCall } from "./life/life-tools";
 import { appendLifeTimelineEntry, loadVirtualLifeState, saveVirtualLifeState } from "./life/life-storage";
 import { characterWorkspace, agentComputerRequest, isAgentComputerConfigured } from "./agent-computer";
-import { AGENT_COMPUTER_CAPABILITY_ID, CHECK_IN_REQUEST_CAPABILITY_ID, CALENDAR_MANAGEMENT_CAPABILITY_ID, DEVICE_ACTION_CAPABILITY_ID, LOCAL_DATA_LIBRARY_CAPABILITY_ID, MEMORY_WRITE_CAPABILITY_ID, MUSIC_CONTROL_CAPABILITY_ID, NOTE_WALL_CAPABILITY_ID, PHOTO_WALL_CAPABILITY_ID, PERCEPTION_READ_CAPABILITY_ID, PHONE_WIDGET_CAPABILITY_ID, REALITY_BRIDGE_CAPABILITY_ID, SEND_FILE_CAPABILITY_ID, SYSTEM_CALENDAR_CAPABILITY_ID, TIMED_WAKE_CAPABILITY_ID, TOOLBOX_MANAGEMENT_CAPABILITY_ID, getInternalCapability } from "./internal-capability-storage";
+import { SHIZUKU_CAPABILITY_ID, AGENT_COMPUTER_CAPABILITY_ID, CHECK_IN_REQUEST_CAPABILITY_ID, CALENDAR_MANAGEMENT_CAPABILITY_ID, DEVICE_ACTION_CAPABILITY_ID, LOCAL_DATA_LIBRARY_CAPABILITY_ID, MEMORY_WRITE_CAPABILITY_ID, MUSIC_CONTROL_CAPABILITY_ID, NOTE_WALL_CAPABILITY_ID, PHOTO_WALL_CAPABILITY_ID, PERCEPTION_READ_CAPABILITY_ID, PHONE_WIDGET_CAPABILITY_ID, REALITY_BRIDGE_CAPABILITY_ID, SEND_FILE_CAPABILITY_ID, SYSTEM_CALENDAR_CAPABILITY_ID, TIMED_WAKE_CAPABILITY_ID, TOOLBOX_MANAGEMENT_CAPABILITY_ID, getInternalCapability } from "./internal-capability-storage";
 import { createPhotoWallId, loadPhotoWallState, savePhotoWallState, type PhotoWallDoodle, type PhotoWallCreationRecord, type PhotoWallPhoto } from "./photo-wall-storage";
 import { generateImageFromConfiguredApi } from "./image-generation-service";
 import {
@@ -875,6 +876,17 @@ function normalizeInternalToolResult(result: ToolResult): ToolResult {
 }
 
 async function executeInternalTool(call: ToolCall, context?: ToolExecutionContext): Promise<ToolResult | null> {
+    if (call.name === "Shizuku手机助手") {
+        try {
+            const c = getInternalCapability(SHIZUKU_CAPABILITY_ID);
+            if (!c?.enabled || c.mode === "off") throw new Error("Shizuku手机助手已关闭。");
+            let scope: ShizukuScope;
+            if (context?.sessionId && ((context.appId === "chat" && context.sourceEngine === "chat") || (context.appId === "group_chat" && context.sourceEngine === "group_chat"))) scope = { mode: context.appId, workspaceId: context.sessionId };
+            else throw new Error("仅允许从实际角色聊天调用手机助手。");
+            const data = await executePersistentShizuku(scope, call.args, context?.signal);
+            return { name: call.name, success: true, data: JSON.stringify(data), continueConversation: true, userNotice: call.args.action === "launch_app" ? "Shizuku：系统已返回应用启动结果。" : "Shizuku：已取得手机查询结果。" };
+        } catch (e) { const error = e instanceof Error ? e.message : "Shizuku未完成。"; return { name: call.name, success: false, error, continueConversation: true, userNotice: error }; }
+    }
     if (isNoteWallToolName(call.name)) return executeNoteWallTool(call, context);
     if (isPhotoWallToolName(call.name)) return executePhotoWallTool(call, context);
     if (isMusicControlToolName(call.name)) return executeMusicControlTool(call, context);

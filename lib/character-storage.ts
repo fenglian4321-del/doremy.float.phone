@@ -1,6 +1,6 @@
 import type { Character, CanvasBgItem } from "./character-types";
 import { normalizeTimeZone } from "./character-time";
-import { kvGet, kvSet, registerKvMigration } from "./kv-db";
+import { kvGet, kvSet, kvSetAsync, kvRemove, registerKvMigration } from "./kv-db";
 
 /** Thrown when a character card contains fields unsupported by the current schema */
 export const CHAR_BLOCKED_FIELDS = "CHAR_BLOCKED_FIELDS";
@@ -81,6 +81,21 @@ export function loadCharacters(): Character[] {
 export function saveCharacters(chars: Character[]): void {
   if (typeof window === "undefined") return;
   kvSet(STORAGE_KEY, JSON.stringify(chars));
+  _charsCache = null;
+  window.dispatchEvent(new CustomEvent(CHARACTERS_UPDATED_EVENT));
+}
+
+/** Wait for durable save; a rejected write must not masquerade as success. */
+export async function saveCharactersAsync(chars: Character[]): Promise<void> {
+  if (typeof window === "undefined") throw new Error("角色库尚未就绪");
+  const previous = kvGet(STORAGE_KEY), encoded = JSON.stringify(chars);
+  _charsCache = null;
+  try { await kvSetAsync(STORAGE_KEY, encoded); }
+  catch {
+    if (kvGet(STORAGE_KEY) === encoded) { if (previous === null) kvRemove(STORAGE_KEY); else kvSet(STORAGE_KEY, previous); }
+    _charsCache = null;
+    throw new Error("角色未能保存到本机，请保留当前编辑内容，检查存储空间后重试。");
+  }
   _charsCache = null;
   window.dispatchEvent(new CustomEvent(CHARACTERS_UPDATED_EVENT));
 }

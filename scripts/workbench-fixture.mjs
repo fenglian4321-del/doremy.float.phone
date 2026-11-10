@@ -65,7 +65,8 @@ export async function createWorkbenchFixture() {
     }};
     const shizukuModule=load('lib/shizuku-tools.ts',{'./kv-db':db},false,{window:shizukuWindow});
     const memoryTools=load('lib/workspace-memory-tools.ts');
-    const assistant=load('lib/workspace-assistant-session.ts',{'./kv-db':db,'./tool-storage':storage,'./tool-prompt':{formatToolSchema:tool=>tool.usageGuide||tool.parameterSchema},'./phone-file-tools':phoneModule,'./phone-device-tools':deviceModule,'./shizuku-tools':shizukuModule,'./scoped-device-ui':{deviceUiAvailability:()=>({available:true,composedTasks:composed})},'./managed-mcp-session':managed,'./workspace-client':client,'./chat-storage':{loadChatSessions:()=>[],resolveSessionCharacterId:()=>''},'./character-storage':{loadCharacters:()=>[]},'./workspace-memory-tools':memoryTools,'./tool-executor':execute});
+    const profileModule=load('lib/shizuku-profile.ts',{'./kv-db':db,'./shizuku-tools':shizukuModule},false,{window:shizukuWindow});
+    const assistant=load('lib/workspace-assistant-session.ts',{'./kv-db':db,'./tool-storage':storage,'./tool-prompt':{formatToolSchema:tool=>tool.usageGuide||tool.parameterSchema},'./phone-file-tools':phoneModule,'./phone-device-tools':deviceModule,'./shizuku-tools':shizukuModule,'./shizuku-profile':profileModule,'./scoped-device-ui':{deviceUiAvailability:()=>({available:true,composedTasks:composed})},'./managed-mcp-session':managed,'./workspace-client':client,'./chat-storage':{loadChatSessions:()=>[],resolveSessionCharacterId:()=>''},'./character-storage':{loadCharacters:()=>[]},'./workspace-memory-tools':memoryTools,'./tool-executor':execute});
     const rawMcp=f.internalNetwork;
     const ownerRequest=async(path,init={})=>{
         const request=new Request('https://float.fixture'+path,{...init,headers:{...init.headers,Origin:'https://float.fixture','x-float-memory-access-token':config.accessToken}});
@@ -95,7 +96,7 @@ export async function createWorkbenchFixture() {
     };
     return {f,load,db,config,client,managed,assistant,memoryTools,model,modelWire,backendWire,nativeWire,floatWrites,approvals,ownerRequest,storage,
         setModel(fn){modelHandler=fn;},setFloatMode(value){floatMode=value;},setStorageFailure(value){failStorage=value;},setCatalogChanged(value){catalogChanged=value;},setComposed(value){composed=value;},
-        shizuku:shizukuModule,shizukuState,shizukuWindow,shizukuWire,shizukuEffects,
+        profile:profileModule,shizuku:shizukuModule,shizukuState,shizukuWindow,shizukuWire,shizukuEffects,
         setShizukuMode(value){shizukuMode=value;},
         enableShizuku(room,allowLaunch=true){shizukuState.ready=true;shizukuState.status='ready';const g={id:webcrypto.randomUUID(),label:'Synthetic selected app',allowLaunch,taskDigest:createHash('sha256').update('合成组合任务').digest('hex'),expires:Date.now()+600000,epoch:shizukuState.epoch,scopeId:key(room.scope)};shizukuGrants.set(g.id,g);shizukuModule.enableShizukuTools(room.scope,g);return g;},
         async create(kind='work'){const response=await client.spaceCall(kind,'create',{title:'新对话',clientKey:webcrypto.randomUUID()});return {workspace:response.workspace,scope:{mode:kind,workspaceId:response.workspace.id}};},

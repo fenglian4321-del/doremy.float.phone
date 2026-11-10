@@ -9,10 +9,11 @@ const object = (v: unknown): v is Record<string, unknown> => !!v && typeof v ===
 const id = (v: unknown): v is string => typeof v === 'string' && /^[A-Za-z0-9_-]{1,100}$/.test(v);
 const scopeKey = (s: PhoneFileScope) => { if (!['work', 'private'].includes(s.mode) || !id(s.workspaceId)) throw new ShizukuError('invalid_scope'); return s.mode + '_' + s.workspaceId; };
 export type ShizukuGrant = { id: string; label: string; allowLaunch: boolean; taskDigest: string; expires: number; epoch: number };
-export type ShizukuStatus = { supported: boolean; ready: boolean; status: string; identity: string; uid: number; epoch: number };
+export type ShizukuProfile = { version: 1; configured: boolean; enabled: boolean; allowChat: boolean; allowLaunch: boolean; revision: number; applications: { packageName: string; label: string }[]; recent: { requestId: string; operation: string; label: string; ok: boolean; code: string; at: number }[] };
+export type ShizukuStatus = { supported: boolean; ready: boolean; status: string; identity: string; uid: number; epoch: number; profile?: ShizukuProfile };
 type Reply = { state: string; code?: string; requestId?: string; operation?: string; replayed?: boolean; grant?: ShizukuGrant; data?: Record<string, unknown>; receipt?: { requestId: string; operation: string; state: string } };
 export type ShizukuTrace = { assistant: true; id: string; tool: string; location: 'shizuku'; ok: boolean; state: 'complete' | 'uncertain' };
-const messages: Record<string, string> = { native_unavailable: '当前浏览器或旧APK没有Shizuku执行桥，请使用配套新版APK。', not_installed: '请自行安装Shizuku；不会代你安装或开启无线调试。', not_running: 'Shizuku未启动，请由你在手机上启动。', permission_required: 'Shizuku尚未授权或权限已撤销。', denied: 'Shizuku授权被拒绝，请自行在Shizuku中核对。', not_ready: '请先授权并连接Float的Shizuku执行通道。', grant_expired: 'Shizuku当前任务授权已停止、断开或过期。', task_mismatch: '任务文字或执行轮次与Shizuku授权不符。', action_uncertain: 'Shizuku结果未确认；请核对原回执，不会自动重做。', task_inactive: '原工作区任务已停止或被接管，Shizuku未继续执行。', package_denied: '不操作权限、安全、系统设置、Shizuku或Float自身应用。' };
+const messages: Record<string, string> = { native_unavailable: '当前浏览器或旧APK没有Shizuku执行桥，请使用配套新版APK。', not_installed: '请自行安装Shizuku；不会代你安装或开启无线调试。', not_running: 'Shizuku未启动，请由你在手机上启动。', permission_required: 'Shizuku尚未授权或权限已撤销。', denied: 'Shizuku授权被拒绝，请自行在Shizuku中核对。', not_ready: '请先授权并连接Float的Shizuku执行通道。', grant_expired: 'Shizuku当前任务授权已停止、断开或过期。', task_mismatch: '任务文字或执行轮次与Shizuku授权不符。', action_uncertain: 'Shizuku结果未确认；请核对原回执，不会自动重做。', task_inactive: '原工作区任务已停止或被接管，Shizuku未继续执行。', profile_disabled: '请先启用Shizuku持续模式。', chat_disabled: '请在持续模式设置中允许角色聊天使用。', read_only: '尚未允许启动应用，请调整持续模式设置。', profile_upgrade: '持续模式需要配套1.0.36或更新APK。', pending_receipt: '有一条未确认的Shizuku回执，请先核对实际结果。', ticket_expired: '本次操作已停止或连接发生变化，请核对结果后重新发起。', cancelled: '已取消操作。', state_unavailable: '本机保存失败，未执行操作。', package_denied: '不操作权限、安全、系统设置、Shizuku或Float自身应用。' };
 export class ShizukuError extends Error { constructor(public code: string) { super(messages[code] || 'Shizuku操作未确认；没有切换到无障碍、SAF或VPS执行。'); } }
 function native() {
     const api = typeof window === 'undefined' ? undefined : (window as unknown as { AndroidShell?: { getShizukuStatus?: () => string; shizukuControl?: (json: string) => string } }).AndroidShell;
@@ -26,8 +27,14 @@ function parse(raw: string): Record<string, unknown> {
     if (value.state === 'failed') throw new ShizukuError(typeof value.code === 'string' ? value.code : 'unavailable');
     return value;
 }
+function readProfile(v: unknown): ShizukuProfile | undefined {
+    if (v === undefined) return undefined;
+    if (!object(v) || v.version !== 1 || !['configured', 'enabled', 'allowChat', 'allowLaunch'].every(k => typeof v[k] === 'boolean') || !Number.isSafeInteger(v.revision) || !Array.isArray(v.applications) || v.applications.length > 16 || v.applications.some(a => !object(a) || typeof a.packageName !== 'string' || !/^[A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z][A-Za-z0-9_]*)+$/.test(a.packageName) || typeof a.label !== 'string' || a.label.length > 80) || !Array.isArray(v.recent) || v.recent.length > 20 || v.recent.some(a => !object(a) || !id(a.requestId) || typeof a.operation !== 'string' || typeof a.label !== 'string' || typeof a.ok !== 'boolean' || typeof a.code !== 'string' || !Number.isSafeInteger(a.at))) throw new ShizukuError('protocol');
+    return v as ShizukuProfile;
+}
+export function shizukuRpc(body: Record<string, unknown>) { return parse(native().shizukuControl(JSON.stringify(body))); }
 export function shizukuStatus(): ShizukuStatus {
-    try { const v = parse(native().getShizukuStatus()); if (typeof v.status !== 'string' || typeof v.ready !== 'boolean' || typeof v.identity !== 'string' || !Number.isInteger(v.uid) || !Number.isInteger(v.epoch) || (v.ready && ![0, 2000].includes(Number(v.uid)))) throw new ShizukuError('protocol'); return { supported: true, ready: v.ready, status: v.status, identity: v.identity, uid: Number(v.uid), epoch: Number(v.epoch) }; }
+    try { const v = parse(native().getShizukuStatus()); if (typeof v.status !== 'string' || typeof v.ready !== 'boolean' || typeof v.identity !== 'string' || !Number.isInteger(v.uid) || !Number.isInteger(v.epoch) || (v.ready && ![0, 2000].includes(Number(v.uid)))) throw new ShizukuError('protocol'); return { supported: true, ready: v.ready, status: v.status, identity: v.identity, uid: Number(v.uid), epoch: Number(v.epoch), profile: readProfile(v.profile) }; }
     catch { return { supported: false, ready: false, status: 'native_unavailable', identity: 'unknown', uid: -1, epoch: -1 }; }
 }
 export function shizukuControl(operation: 'permission' | 'connect' | 'disconnect') { return parse(native().shizukuControl(JSON.stringify({ operation }))); }
